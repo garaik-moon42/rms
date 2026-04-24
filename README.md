@@ -19,7 +19,7 @@ Ez a projekt azt a kényelmet adja meg, hogy minden új Google Sheets + Apps Scr
 - előre beállított `clasp` workflow;
 - külön `src/` és `build/` mappa;
 - automatikus manifest másolás build közben;
-- egy egyszerű minta custom function.
+- egy egyszerű Gmail csatolmány-feldolgozó iktatási kiindulópont.
 
 Így nem kell minden új projekt elején újra kézzel összerakni a TypeScript, `clasp` és Apps Script build környezetet.
 
@@ -36,7 +36,7 @@ Ez a projekt azt a kényelmet adja meg, hogy minden új Google Sheets + Apps Scr
 ├── scripts/
 │   └── copy-manifest.mjs
 ├── src/
-│   └── Code.ts
+│   └── code.ts
 └── tsconfig.json
 ```
 
@@ -205,7 +205,7 @@ Ez azért jó, mert:
 
 ## TypeScript beállítások
 
-A [tsconfig.json](/home/garaik/work/clasp/clasptest/tsconfig.json) fontosabb részei:
+A [tsconfig.json](tsconfig.json) fontosabb részei:
 
 - `rootDir: "src"`
 - `outDir: "build"`
@@ -217,13 +217,13 @@ Ezek biztosítják, hogy a forrás a `src/` mappában legyen, a kimenet a `build
 
 ## Minta kód
 
-A [src/Code.ts](/home/garaik/work/clasp/clasptest/src/Code.ts) jelenleg egy egyszerű példa Google Sheets custom functiont tartalmaz:
+A [src/code.ts](src/code.ts) jelenleg egy Gmail csatolmány-feldolgozó iktatási kiindulópontot tartalmaz:
 
 ```ts
-function ADD_NUMBERS(a: unknown, b: unknown): number
+function processUnreadInboxAttachments(): void
 ```
 
-Ez csak mintaindulópont. Új projekt indításakor nyugodtan lecserélheted a saját Apps Script logikádra.
+Ez megkeresi az olvasatlan inbox levelek csatolmányait, és a metaadataikat a `REGISTRY` munkalapra írja.
 
 ## Fontos megjegyzések
 
