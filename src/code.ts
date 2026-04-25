@@ -1,52 +1,53 @@
 const REGISTRY_SHEET_NAME = "REGISTRY";
 const ERROR_LABEL_NAME = "HIBA";
+const TARGET_DRIVE_FOLDER_ID_PROPERTY = "TARGET_DRIVE_FOLDER_ID";
 const UNREAD_INBOX_QUERY = "in:inbox is:unread";
 const REGISTRY_NUMBER_PREFIX = "R";
 const REGISTRY_NUMBER_DIGITS = 7;
 
 const REGISTRY_HEADERS = [
-  "Iktatószám",
-  "Email dátuma",
-  "Feladó",
-  "Tárgy",
-  "Fájlnév",
-  "MIME típus",
-  "Méret (byte)",
-  "Message ID",
-  "Attachment ID",
-  "Csatolmány sorszám",
+  "seq",
+  "meta",
+  "metaMessageId",
+  "metaAttachmentIndex",
+  "done",
+  "direction",
+  "partner",
+  "type",
+  "empReim",
+  "travelAuthRef",
+  "notes",
+  "googleDriveId",
+  "id",
+  "amount",
+  "currency",
+  "refDate",
+  "dueDate",
 ] as const;
 
-const LEGACY_HEADERS_WITHOUT_REGISTRY_NUMBER = [
-  "Email dátuma",
-  "Feladó",
-  "Tárgy",
-  "Fájlnév",
-  "MIME típus",
-  "Méret (byte)",
-  "Message ID",
-  "Csatolmány sorszám",
-] as const;
-
-const LEGACY_HEADERS_WITHOUT_ATTACHMENT_ID = [
-  "Iktatószám",
-  "Email dátuma",
-  "Feladó",
-  "Tárgy",
-  "Fájlnév",
-  "MIME típus",
-  "Méret (byte)",
-  "Message ID",
-  "Csatolmány sorszám",
-] as const;
-
-const REGISTRY_NUMBER_COLUMN = 1;
-const MESSAGE_ID_COLUMN = 8;
-const ATTACHMENT_ID_COLUMN = 9;
-const ATTACHMENT_INDEX_COLUMN = 10;
+const SEQ_COLUMN = 1;
+const META_COLUMN = 2;
+const META_MESSAGE_ID_COLUMN = 3;
+const META_ATTACHMENT_INDEX_COLUMN = 4;
+const DONE_COLUMN = 5;
+const EMP_REIM_COLUMN = 9;
+const GOOGLE_DRIVE_ID_COLUMN = 12;
 const FIRST_DATA_ROW = 2;
 
+type AttachmentMetadata = {
+  emailDate: string;
+  emailSender: string;
+  emailRecipients: string;
+  emailSubject: string;
+  attachmentFileName: string;
+  attachmentMimeType: string;
+  attachmentSize: number;
+  messageId: string;
+  attachmentIndex: number;
+};
+
 type RegistryRow = {
+  attachment: GoogleAppsScript.Gmail.GmailAttachment;
   values: unknown[];
   timestamp: number;
 };
@@ -55,7 +56,42 @@ function onOpen(): void {
   SpreadsheetApp.getUi()
     .createMenu("Iktatás")
     .addItem("Olvasatlan levelek feldolgozása", "processUnreadInboxAttachments")
+    .addItem("Drive célmappa beállítása", "setTargetDriveFolderId")
     .addToUi();
+}
+
+function setTargetDriveFolderId(): void {
+  const ui = SpreadsheetApp.getUi();
+  const response = ui.prompt(
+    "Drive célmappa beállítása",
+    "Add meg a meglévő Google Drive célmappa ID-ját vagy URL-jét.",
+    ui.ButtonSet.OK_CANCEL,
+  );
+
+  if (response.getSelectedButton() !== ui.Button.OK) {
+    return;
+  }
+
+  const folderId = parseDriveFolderId(response.getResponseText());
+
+  if (folderId === "") {
+    ui.alert("Nem adtál meg Drive mappa azonosítót.");
+    return;
+  }
+
+  try {
+    const folder = DriveApp.getFolderById(folderId);
+    const folderName = folder.getName();
+
+    PropertiesService
+      .getScriptProperties()
+      .setProperty(TARGET_DRIVE_FOLDER_ID_PROPERTY, folderId);
+
+    ui.alert(`Drive célmappa beállítva: ${folderName}`);
+  } catch (error) {
+    console.error("Could not set target Drive folder", { folderId, error });
+    ui.alert("A megadott Drive mappa nem érhető el ezzel a fiókkal.");
+  }
 }
 
 function processUnreadInboxAttachments(): void {
@@ -71,7 +107,7 @@ function processUnreadInboxAttachments(): void {
 
 function processUnreadInboxAttachmentsLocked(): void {
   const registrySheet = getOrCreateRegistrySheet();
-  const processedAttachmentKeys = getProcessedAttachmentKeys(registrySheet);
+  const processedAttachmentKeys = new Set<string>();
   const errorLabel = getOrCreateLabel(ERROR_LABEL_NAME);
   const threads = GmailApp.search(UNREAD_INBOX_QUERY);
   const registryRows: RegistryRow[] = [];
@@ -83,7 +119,9 @@ function processUnreadInboxAttachmentsLocked(): void {
     }
 
     try {
-      registryRows.push(...collectThreadRows(thread, processedAttachmentKeys));
+      registryRows.push(
+        ...collectThreadRows(thread, registrySheet, processedAttachmentKeys),
+      );
       successfullyProcessedThreads.push(thread);
     } catch (error) {
       thread.addLabel(errorLabel);
@@ -112,6 +150,7 @@ function processUnreadInboxAttachmentsLocked(): void {
 
 function collectThreadRows(
   thread: GoogleAppsScript.Gmail.GmailThread,
+  registrySheet: GoogleAppsScript.Spreadsheet.Sheet,
   processedAttachmentKeys: Set<string>,
 ): RegistryRow[] {
   const rows: RegistryRow[] = [];
@@ -125,32 +164,59 @@ function collectThreadRows(
       includeInlineImages: false,
       includeAttachments: true,
     });
+    const processedAttachmentIndexes = getProcessedAttachmentIndexesForMessage(
+      registrySheet,
+      message.getId(),
+    );
 
     attachments.forEach((attachment, index) => {
       const attachmentIndex = index + 1;
       const attachmentKey = buildAttachmentKey(message.getId(), attachmentIndex);
 
-      if (processedAttachmentKeys.has(attachmentKey)) {
+      if (
+        processedAttachmentKeys.has(attachmentKey) ||
+        processedAttachmentIndexes.has(attachmentIndex)
+      ) {
         return;
       }
 
       const messageDate = message.getDate();
+      const metadata: AttachmentMetadata = {
+        emailDate: messageDate.toISOString(),
+        emailSender: message.getFrom(),
+        emailRecipients: getMessageRecipients(message),
+        emailSubject: message.getSubject(),
+        attachmentFileName: attachment.getName(),
+        attachmentMimeType: attachment.getContentType(),
+        attachmentSize: attachment.getSize(),
+        messageId: message.getId(),
+        attachmentIndex,
+      };
 
       rows.push({
+        attachment,
         values: [
-          messageDate,
-          message.getFrom(),
-          message.getSubject(),
-          attachment.getName(),
-          attachment.getContentType(),
-          attachment.getSize(),
+          JSON.stringify(metadata, null, 2),
           message.getId(),
-          buildAttachmentId(message.getId(), attachmentIndex, attachment),
           attachmentIndex,
+          false,
+          "",
+          "",
+          "",
+          false,
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
         ],
         timestamp: messageDate.getTime(),
       });
       processedAttachmentKeys.add(attachmentKey);
+      processedAttachmentIndexes.add(attachmentIndex);
     });
   }
 
@@ -169,19 +235,49 @@ function writeRegistryRowsAtTop(
   const sortedRows = rows
     .sort((a, b) => a.timestamp - b.timestamp)
     .map((row, index) => ({
+      attachment: row.attachment,
       values: [
         formatRegistryNumber(nextRegistryNumber + index),
         ...row.values,
       ],
       timestamp: row.timestamp,
     }))
-    .sort((a, b) => b.timestamp - a.timestamp)
-    .map((row) => row.values);
+    .sort((a, b) => b.timestamp - a.timestamp);
+  const targetFolder = getTargetDriveFolder();
+  const uploadedFileIds: string[] = [];
+  let rowsInserted = false;
 
-  registrySheet.insertRowsBefore(FIRST_DATA_ROW, sortedRows.length);
-  registrySheet
-    .getRange(FIRST_DATA_ROW, 1, sortedRows.length, REGISTRY_HEADERS.length)
-    .setValues(sortedRows);
+  try {
+    for (const row of sortedRows) {
+      const registryNumber = String(row.values[0]);
+      const driveFile = uploadAttachmentToDrive(
+        targetFolder,
+        registryNumber,
+        row.attachment,
+      );
+      const driveFileId = driveFile.getId();
+
+      uploadedFileIds.push(driveFileId);
+      row.values[GOOGLE_DRIVE_ID_COLUMN - 1] = driveFileId;
+    }
+
+    const rowValues = sortedRows.map((row) => row.values);
+
+    registrySheet.insertRowsBefore(FIRST_DATA_ROW, sortedRows.length);
+    rowsInserted = true;
+    registrySheet
+      .getRange(FIRST_DATA_ROW, 1, sortedRows.length, REGISTRY_HEADERS.length)
+      .setValues(rowValues);
+    applyCheckboxValidation(registrySheet, FIRST_DATA_ROW, sortedRows.length);
+  } catch (error) {
+    trashDriveFiles(uploadedFileIds);
+
+    if (rowsInserted) {
+      deleteInsertedRegistryRows(registrySheet, sortedRows.length);
+    }
+
+    throw error;
+  }
 }
 
 function getOrCreateRegistrySheet(): GoogleAppsScript.Spreadsheet.Sheet {
@@ -196,13 +292,8 @@ function getOrCreateRegistrySheet(): GoogleAppsScript.Spreadsheet.Sheet {
 }
 
 function ensureRegistryHeaders(sheet: GoogleAppsScript.Spreadsheet.Sheet): void {
-  if (hasHeaders(sheet, LEGACY_HEADERS_WITHOUT_REGISTRY_NUMBER)) {
-    sheet.insertColumnBefore(REGISTRY_NUMBER_COLUMN);
-  }
-
-  if (hasHeaders(sheet, LEGACY_HEADERS_WITHOUT_ATTACHMENT_ID)) {
-    sheet.insertColumnBefore(ATTACHMENT_ID_COLUMN);
-  }
+  ensureMetaColumns(sheet);
+  ensureRegistryColumnCount(sheet);
 
   const headerRange = sheet.getRange(1, 1, 1, REGISTRY_HEADERS.length);
   const currentHeaders = headerRange.getValues()[0];
@@ -216,15 +307,53 @@ function ensureRegistryHeaders(sheet: GoogleAppsScript.Spreadsheet.Sheet): void 
   }
 }
 
-function hasHeaders(
-  sheet: GoogleAppsScript.Spreadsheet.Sheet,
-  expectedHeaders: readonly string[],
-): boolean {
-  const currentHeaders = sheet
-    .getRange(1, 1, 1, expectedHeaders.length)
+function ensureMetaColumns(sheet: GoogleAppsScript.Spreadsheet.Sheet): void {
+  if (sheet.getMaxColumns() < META_COLUMN) {
+    return;
+  }
+
+  const firstHeaders = sheet
+    .getRange(1, 1, 1, META_ATTACHMENT_INDEX_COLUMN)
     .getValues()[0];
 
-  return expectedHeaders.every((header, index) => currentHeaders[index] === header);
+  if (firstHeaders[0] === "seq" && firstHeaders[1] !== "meta") {
+    sheet.insertColumnBefore(META_COLUMN);
+  }
+
+  const updatedFirstHeaders = sheet
+    .getRange(1, 1, 1, META_ATTACHMENT_INDEX_COLUMN)
+    .getValues()[0];
+
+  if (
+    updatedFirstHeaders[0] === "seq" &&
+    updatedFirstHeaders[1] === "meta" &&
+    updatedFirstHeaders[2] !== "metaMessageId"
+  ) {
+    sheet.insertColumnBefore(META_MESSAGE_ID_COLUMN);
+  }
+
+  const finalFirstHeaders = sheet
+    .getRange(1, 1, 1, META_ATTACHMENT_INDEX_COLUMN)
+    .getValues()[0];
+
+  if (
+    finalFirstHeaders[0] === "seq" &&
+    finalFirstHeaders[1] === "meta" &&
+    finalFirstHeaders[2] === "metaMessageId" &&
+    finalFirstHeaders[3] !== "metaAttachmentIndex"
+  ) {
+    sheet.insertColumnBefore(META_ATTACHMENT_INDEX_COLUMN);
+  }
+}
+
+function ensureRegistryColumnCount(
+  sheet: GoogleAppsScript.Spreadsheet.Sheet,
+): void {
+  const missingColumnCount = REGISTRY_HEADERS.length - sheet.getMaxColumns();
+
+  if (missingColumnCount > 0) {
+    sheet.insertColumnsAfter(sheet.getMaxColumns(), missingColumnCount);
+  }
 }
 
 function ensureRegistryNumbers(sheet: GoogleAppsScript.Spreadsheet.Sheet): void {
@@ -234,66 +363,70 @@ function ensureRegistryNumbers(sheet: GoogleAppsScript.Spreadsheet.Sheet): void 
     return;
   }
 
-  const registryNumberRange = sheet.getRange(
-    FIRST_DATA_ROW,
-    REGISTRY_NUMBER_COLUMN,
-    lastRow - 1,
-    1,
-  );
-  const registryNumberRows = registryNumberRange.getValues();
-  let nextRegistryNumber = getNextRegistryNumber(sheet);
-  let hasMissingRegistryNumber = false;
+  const latestRegistryNumberCell = sheet.getRange(FIRST_DATA_ROW, SEQ_COLUMN);
 
-  for (let index = registryNumberRows.length - 1; index >= 0; index -= 1) {
-    if (registryNumberRows[index][0] !== "") {
-      continue;
-    }
-
-    registryNumberRows[index][0] = formatRegistryNumber(nextRegistryNumber);
-    nextRegistryNumber += 1;
-    hasMissingRegistryNumber = true;
-  }
-
-  if (hasMissingRegistryNumber) {
-    registryNumberRange.setValues(registryNumberRows);
+  if (latestRegistryNumberCell.getValue() === "") {
+    latestRegistryNumberCell.setValue(formatRegistryNumber(getNextRegistryNumber(sheet)));
   }
 }
 
-function getProcessedAttachmentKeys(
+function getProcessedAttachmentIndexesForMessage(
   sheet: GoogleAppsScript.Spreadsheet.Sheet,
-): Set<string> {
+  messageId: string,
+): Set<number> {
   const lastRow = sheet.getLastRow();
-  const processedAttachmentKeys = new Set<string>();
+  const processedAttachmentIndexes = new Set<number>();
 
-  if (lastRow < 2) {
-    return processedAttachmentKeys;
+  if (lastRow < FIRST_DATA_ROW) {
+    return processedAttachmentIndexes;
   }
 
-  const keyRows = sheet
-    .getRange(2, MESSAGE_ID_COLUMN, lastRow - 1, ATTACHMENT_INDEX_COLUMN - MESSAGE_ID_COLUMN + 1)
-    .getValues();
+  const metaMatches = sheet
+    .getRange(FIRST_DATA_ROW, META_MESSAGE_ID_COLUMN, lastRow - 1, 1)
+    .createTextFinder(messageId)
+    .useRegularExpression(false)
+    .matchCase(true)
+    .matchEntireCell(true)
+    .findAll();
 
-  for (const [messageId, , attachmentIndex] of keyRows) {
-    if (messageId === "" || attachmentIndex === "") {
+  for (const metaMatch of metaMatches) {
+    const attachmentIndex = sheet
+      .getRange(metaMatch.getRow(), META_ATTACHMENT_INDEX_COLUMN)
+      .getValue();
+    const parsedAttachmentIndex = Number(attachmentIndex);
+
+    if (Number.isInteger(parsedAttachmentIndex)) {
+      processedAttachmentIndexes.add(parsedAttachmentIndex);
+    }
+  }
+
+  if (processedAttachmentIndexes.size > 0) {
+    return processedAttachmentIndexes;
+  }
+
+  const legacyMetaMatches = sheet
+    .getRange(FIRST_DATA_ROW, META_COLUMN, lastRow - 1, 1)
+    .createTextFinder(messageId)
+    .useRegularExpression(false)
+    .matchCase(true)
+    .matchEntireCell(false)
+    .findAll();
+
+  for (const metaMatch of legacyMetaMatches) {
+    const metadata = parseAttachmentMetadata(String(metaMatch.getValue()));
+
+    if (metadata === null || metadata.messageId !== messageId) {
       continue;
     }
 
-    processedAttachmentKeys.add(buildAttachmentKey(String(messageId), Number(attachmentIndex)));
+    processedAttachmentIndexes.add(metadata.attachmentIndex);
   }
 
-  return processedAttachmentKeys;
+  return processedAttachmentIndexes;
 }
 
 function buildAttachmentKey(messageId: string, attachmentIndex: number): string {
   return `${messageId}:${attachmentIndex}`;
-}
-
-function buildAttachmentId(
-  messageId: string,
-  attachmentIndex: number,
-  attachment: GoogleAppsScript.Gmail.GmailAttachment,
-): string {
-  return `${messageId}:${attachmentIndex}:${attachment.getHash()}`;
 }
 
 function getNextRegistryNumber(sheet: GoogleAppsScript.Spreadsheet.Sheet): number {
@@ -303,8 +436,18 @@ function getNextRegistryNumber(sheet: GoogleAppsScript.Spreadsheet.Sheet): numbe
     return 1;
   }
 
+  const latestRegistryNumber = parseRegistryNumber(
+    sheet.getRange(FIRST_DATA_ROW, SEQ_COLUMN).getValue(),
+  );
+
+  if (latestRegistryNumber !== null) {
+    return latestRegistryNumber + 1;
+  }
+
+  console.warn("Could not parse latest registry number, scanning seq column");
+
   const registryNumberRows = sheet
-    .getRange(FIRST_DATA_ROW, REGISTRY_NUMBER_COLUMN, lastRow - 1, 1)
+    .getRange(FIRST_DATA_ROW, SEQ_COLUMN, lastRow - 1, 1)
     .getValues();
   const maxRegistryNumber = registryNumberRows.reduce((maxNumber, [registryNumber]) => {
     const parsedRegistryNumber = parseRegistryNumber(registryNumber);
@@ -334,6 +477,135 @@ function parseRegistryNumber(value: unknown): number | null {
 
 function formatRegistryNumber(registryNumber: number): string {
   return `${REGISTRY_NUMBER_PREFIX}${String(registryNumber).padStart(REGISTRY_NUMBER_DIGITS, "0")}`;
+}
+
+function getTargetDriveFolder(): GoogleAppsScript.Drive.Folder {
+  const folderId = PropertiesService
+    .getScriptProperties()
+    .getProperty(TARGET_DRIVE_FOLDER_ID_PROPERTY);
+
+  if (folderId === null || folderId.trim() === "") {
+    throw new Error(`Missing script property: ${TARGET_DRIVE_FOLDER_ID_PROPERTY}`);
+  }
+
+  return DriveApp.getFolderById(folderId.trim());
+}
+
+function uploadAttachmentToDrive(
+  folder: GoogleAppsScript.Drive.Folder,
+  registryNumber: string,
+  attachment: GoogleAppsScript.Gmail.GmailAttachment,
+): GoogleAppsScript.Drive.File {
+  const fileName = buildDriveFileName(registryNumber, attachment.getName());
+  const blob = attachment.copyBlob().setName(fileName);
+
+  return folder.createFile(blob);
+}
+
+function buildDriveFileName(registryNumber: string, originalFileName: string): string {
+  const trimmedFileName = originalFileName.trim();
+
+  if (trimmedFileName === "") {
+    return registryNumber;
+  }
+
+  return `${registryNumber}_${trimmedFileName}`;
+}
+
+function trashDriveFiles(fileIds: string[]): void {
+  for (const fileId of fileIds) {
+    try {
+      DriveApp.getFileById(fileId).setTrashed(true);
+    } catch (error) {
+      console.error("Could not trash uploaded Drive file after failure", {
+        fileId,
+        error,
+      });
+    }
+  }
+}
+
+function deleteInsertedRegistryRows(
+  sheet: GoogleAppsScript.Spreadsheet.Sheet,
+  rowCount: number,
+): void {
+  try {
+    sheet.deleteRows(FIRST_DATA_ROW, rowCount);
+  } catch (error) {
+    console.error("Could not delete inserted registry rows after failure", {
+      rowCount,
+      error,
+    });
+  }
+}
+
+function parseDriveFolderId(input: string): string {
+  const trimmedInput = input.trim();
+  const folderUrlMatch = trimmedInput.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+
+  if (folderUrlMatch !== null) {
+    return folderUrlMatch[1];
+  }
+
+  return trimmedInput;
+}
+
+function getMessageRecipients(
+  message: GoogleAppsScript.Gmail.GmailMessage,
+): string {
+  return [message.getTo(), message.getCc(), message.getBcc()]
+    .filter((recipient) => recipient !== "")
+    .join(", ");
+}
+
+function parseAttachmentMetadata(metadataJson: string): AttachmentMetadata | null {
+  if (metadataJson.trim() === "") {
+    return null;
+  }
+
+  try {
+    const parsedMetadata = JSON.parse(metadataJson) as Partial<AttachmentMetadata>;
+
+    if (
+      typeof parsedMetadata.messageId !== "string" ||
+      typeof parsedMetadata.attachmentIndex !== "number" ||
+      !Number.isInteger(parsedMetadata.attachmentIndex)
+    ) {
+      return null;
+    }
+
+    const messageId = parsedMetadata.messageId;
+    const attachmentIndex = parsedMetadata.attachmentIndex;
+
+    return {
+      emailDate: String(parsedMetadata.emailDate ?? ""),
+      emailSender: String(parsedMetadata.emailSender ?? ""),
+      emailRecipients: String(parsedMetadata.emailRecipients ?? ""),
+      emailSubject: String(parsedMetadata.emailSubject ?? ""),
+      attachmentFileName: String(parsedMetadata.attachmentFileName ?? ""),
+      attachmentMimeType: String(parsedMetadata.attachmentMimeType ?? ""),
+      attachmentSize: Number(parsedMetadata.attachmentSize ?? 0),
+      messageId,
+      attachmentIndex,
+    };
+  } catch (error) {
+    console.warn("Could not parse attachment metadata", { error });
+
+    return null;
+  }
+}
+
+function applyCheckboxValidation(
+  sheet: GoogleAppsScript.Spreadsheet.Sheet,
+  startRow: number,
+  rowCount: number,
+): void {
+  const checkboxRule = SpreadsheetApp.newDataValidation()
+    .requireCheckbox()
+    .build();
+
+  sheet.getRange(startRow, DONE_COLUMN, rowCount, 1).setDataValidation(checkboxRule);
+  sheet.getRange(startRow, EMP_REIM_COLUMN, rowCount, 1).setDataValidation(checkboxRule);
 }
 
 function getOrCreateLabel(labelName: string): GoogleAppsScript.Gmail.GmailLabel {

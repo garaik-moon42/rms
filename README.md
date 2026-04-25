@@ -1,27 +1,156 @@
-# Google Apps Script TypeScript Skeleton
+# RMS - Gmail alapú iktatórendszer
 
-Ez a repository egy skeleton projekt Google Apps Script fejlesztéshez. A célja az, hogy új Google Sheetshez kötött Apps Script projekteket gyorsan lehessen indítani egy előre elkészített, TypeScript alapú helyi környezettel.
+Ez a projekt egy Google Sheetshez kötött Google Apps Script alapú iktatórendszer első verziója.
 
-A skeletonból kiindulva az új projekt menete röviden:
+A rendszer egy Gmail fiók olvasatlan beérkező leveleit dolgozza fel: megkeresi az üzenetek csatolmányait, feltölti őket egy beállított Google Drive célmappába, a csatolmányok metaadatait és Drive file ID-ját beírja a scripthez tartozó Google Sheet `REGISTRY` munkalapjára, majd sikeres feldolgozás után olvasottra állítja és archiválja az érintett levelezési szálakat.
 
-1. Klónozd ezt a repót.
-2. Telepítsd a Node-függőségeket.
-3. Hozz létre egy új Google Sheetet.
-4. Hozd létre benne a bound Apps Script projektet.
-5. Másold be a kapott `Script ID`-t a helyi `.clasp.json` fájlba.
-6. Pushold fel a buildelt kódot.
+## Aktuális működés
 
-## Mire való ez a skeleton
+A fő belépési pont:
 
-Ez a projekt azt a kényelmet adja meg, hogy minden új Google Sheets + Apps Script projekted ugyanarról az alapról induljon:
+```ts
+function processUnreadInboxAttachments(): void
+```
 
-- TypeScript forráskód;
-- előre beállított `clasp` workflow;
-- külön `src/` és `build/` mappa;
-- automatikus manifest másolás build közben;
-- egy egyszerű Gmail csatolmány-feldolgozó iktatási kiindulópont.
+A feldolgozás menete:
 
-Így nem kell minden új projekt elején újra kézzel összerakni a TypeScript, `clasp` és Apps Script build környezetet.
+1. Dokumentum lockot kér, hogy két futás ne írjon párhuzamosan ugyanabba a Sheetbe.
+2. Létrehozza vagy előkészíti a `REGISTRY` munkalapot.
+3. Beolvassa a már feldolgozott csatolmányok kulcsait.
+4. Megkeresi a Gmail fiók olvasatlan inbox threadjeit ezzel a queryvel:
+
+   ```text
+   in:inbox is:unread
+   ```
+
+5. Kihagyja azokat a threadeket, amelyeken már rajta van a `HIBA` label.
+6. Az olvasatlan üzenetek nem inline csatolmányairól registry sorokat készít.
+7. A csatolmányokat feltölti a `TARGET_DRIVE_FOLDER_ID` Script Property-ben megadott Drive célmappába.
+8. A feltöltött Drive fájl ID-ját beírja a `googleDriveId` oszlopba.
+9. Az új sorokat a fejléc alá, a munkalap tetejére írja.
+10. Sikeres írás után az érintett threadeket olvasottra állítja és archiválja.
+11. Hiba esetén az érintett thread `HIBA` labelt kap, és a hiba bekerül a logba.
+
+## Registry munkalap
+
+A rendszer a `REGISTRY` nevű munkalapot használja. Ha nem létezik, létrehozza.
+
+Az aktuális fejléc a régi iktatórendszer oszlopait követi:
+
+| Oszlop | Tartalom |
+| --- | --- |
+| `seq` | Egyedi iktatószám, például `R0000001`. |
+| `meta` | A Gmail üzenet és csatolmány technikai metaadatai JSON formában. |
+| `metaMessageId` | Gmail message azonosító technikai kereséshez és deduplikációhoz. |
+| `metaAttachmentIndex` | A csatolmány üzeneten belüli sorszáma technikai kereséshez és deduplikációhoz. |
+| `done` | Checkbox. Új iktatásnál `false`; manuális feldolgozás után kell bejelölni. |
+| `direction` | Bejövő/kimenő irány. Később automatikusan tölthető; jelenleg üres. |
+| `partner` | Kapcsolódó partner neve. Manuálisan töltendő. |
+| `type` | Dokumentumtípus. Manuálisan választandó/töltendő. |
+| `empReim` | Checkbox. Kiküldetési rendelvényhez kapcsolódik-e; új iktatásnál `false`. |
+| `travelAuthRef` | Kapcsolódó kiküldetési rendelvény iktatószáma. Manuálisan töltendő. |
+| `notes` | Manuális feljegyzések. Új iktatásnál üres. |
+| `googleDriveId` | A feltöltött dokumentum Google Drive file ID-ja. |
+| `id` | Dokumentum saját azonosítója, például számlasorszám. Manuálisan töltendő. |
+| `amount` | Dokumentumhoz kapcsolódó összeg. Manuálisan töltendő. |
+| `currency` | Összeg devizaneme 3 karakteres kóddal. Manuálisan töltendő. |
+| `refDate` | Dokumentumhoz kapcsolódó dátum, például számla kelte. Manuálisan töltendő. |
+| `dueDate` | Dokumentumhoz kapcsolódó határidő. Manuálisan töltendő. |
+
+A kód a fejlécsort ezekre az oszlopokra állítja. Ha egy korábbi `REGISTRY` munkalapon hiányoznak a `seq` utáni meta oszlopok, akkor beszúrja őket, hogy a régi adatok a megfelelő oszlopok alatt maradjanak.
+
+## Iktatószámok
+
+Az iktatószám formátuma:
+
+```text
+R0000001
+```
+
+Beállítások a forrásban:
+
+```ts
+const REGISTRY_NUMBER_PREFIX = "R";
+const REGISTRY_NUMBER_DIGITS = 7;
+```
+
+Új sorok írásakor a rendszer optimistán a második sorban lévő, legfrissebbnek tekintett `seq` értékből számolja a következő iktatószámot. Ha ez nem értelmezhető, visszaesik a teljes `seq` oszlop átnézésére, és a legnagyobb meglévő iktatószámtól folytatja a számozást.
+
+## Email metaadatok
+
+Az emailből származó technikai metaadatok a `meta` oszlopba kerülnek JSON-ként. A deduplikációhoz legfontosabb mezők emellett külön oszlopba is bekerülnek: `metaMessageId` és `metaAttachmentIndex`.
+
+A JSON szerkezete:
+
+```json
+{
+  "emailDate": "",
+  "emailSender": "",
+  "emailRecipients": "",
+  "emailSubject": "",
+  "attachmentFileName": "",
+  "attachmentMimeType": "",
+  "attachmentSize": 0,
+  "messageId": "",
+  "attachmentIndex": 0
+}
+```
+
+Az `emailDate` ISO dátum-stringként kerül mentésre. Az `emailRecipients` a Gmail üzenet `To`, `Cc` és `Bcc` mezőiből összeállított szöveg.
+
+## Duplikációkezelés
+
+A feldolgozott csatolmányok azonosítása jelenleg ezzel a kulccsal történik:
+
+```text
+<messageId>:<attachmentIndex>
+```
+
+Ezt a kulcsot elsősorban a `metaMessageId` és `metaAttachmentIndex` oszlopokból olvassa vissza. A kód az aktuális Gmail `messageId` értékére keres rá a `metaMessageId` oszlopban, és csak a találati sorok `metaAttachmentIndex` értékét olvassa. Átmeneti kompatibilitásként, ha ezekben nincs találat, a `meta` JSON oszlopban is keres.
+
+## Hibakezelés
+
+A hibás threadekre a rendszer `HIBA` Gmail labelt tesz.
+
+Fontos viselkedések:
+
+- ha egy thread feldolgozása közben hiba történik, a thread `HIBA` labelt kap;
+- ha a registry írás vagy az archiválás hibázik, az addig sikeresnek tekintett threadek is `HIBA` labelt kapnak;
+- a `HIBA` labellel rendelkező threadeket a következő futások kihagyják;
+- sikeres feldolgozás után a thread olvasott lesz és kikerül az inboxból.
+
+Ez szándékosan konzervatív működés: sikertelen vagy bizonytalan állapotú leveleket nem archivál csendben.
+
+## Menü
+
+A Sheet megnyitásakor az `onOpen()` függvény létrehoz egy egyedi menüt:
+
+```text
+Iktatás > Olvasatlan levelek feldolgozása
+Iktatás > Drive célmappa beállítása
+```
+
+Az első menüpont kézzel indítja a feldolgozást a Google Sheets felületéről. A második menüpont bekéri egy már meglévő Google Drive célmappa ID-ját vagy URL-jét, ellenőrzi, hogy a mappa elérhető-e, majd elmenti a `TARGET_DRIVE_FOLDER_ID` Script Property értékbe.
+
+Később időzített trigger is hozzáadható, de jelenleg nincs automatikus trigger definiálva a repositoryban.
+
+## Jogosultságok
+
+Az Apps Script manifest jelenlegi scope-jai:
+
+```json
+[
+  "https://mail.google.com/",
+  "https://www.googleapis.com/auth/drive",
+  "https://www.googleapis.com/auth/spreadsheets.currentonly"
+]
+```
+
+Ezek a jelenlegi működéshez szükségesek:
+
+- Gmail olvasás, label kezelés, olvasottra állítás és archiválás;
+- Google Drive célmappa ellenőrzése és csatolmányok feltöltése;
+- az aktuális Google Sheet írása.
 
 ## Projektstruktúra
 
@@ -40,195 +169,99 @@ Ez a projekt azt a kényelmet adja meg, hogy minden új Google Sheets + Apps Scr
 └── tsconfig.json
 ```
 
-Az egyes fontosabb elemek szerepe:
+Fontos fájlok:
 
-- `src/`
-  Itt van a TypeScript forráskód. Az Apps Script logikát itt érdemes írni.
+- `src/code.ts`: az Apps Script TypeScript forráskódja;
+- `appsscript.json`: Apps Script manifest, scope-okkal és runtime beállításokkal;
+- `scripts/copy-manifest.mjs`: build után bemásolja a manifestet a `build/` mappába;
+- `.clasp.json.example`: minta `clasp` konfiguráció;
+- `.clasp.json`: helyi, nem verziózott `clasp` konfiguráció a konkrét `scriptId` értékkel.
 
-- `build/`
-  Generált kimeneti mappa. Ide kerül a fordított JavaScript és a bemásolt `appsscript.json`. Ez a mappa nincs verziókezelés alatt.
+## Build és deploy
 
-- `appsscript.json`
-  Az Apps Script manifest. Ide kerülnek a projekt szintű beállítások, például időzóna, runtime vagy később scope-ok és service dependency-k.
+A projekt TypeScriptben készül, de Google Apps Scriptbe fordított JavaScript kerül feltöltésre.
 
-- `.clasp.json.example`
-  Minta `clasp` konfiguráció. Ebből kell új projektnél létrehozni a valódi `.clasp.json` fájlt.
+A build folyamata:
 
-- `.clasp.json`
-  A valódi, helyi `clasp` konfiguráció. Ez nincs verziózva, mert projekt-specifikus `scriptId`-t tartalmaz.
-
-- `scripts/copy-manifest.mjs`
-  Build után átmásolja az `appsscript.json` fájlt a `build/` mappába.
-
-## Hogyan működik a build és a push
-
-Ez a projekt nem közvetlenül a TypeScript fájlokat tölti fel Google Apps Scriptbe.
-
-A folyamat:
-
-1. A `src/*.ts` fájlokat a TypeScript compiler lefordítja JavaScriptre.
+1. `tsc` lefordítja a `src/*.ts` fájlokat.
 2. A kimenet a `build/` mappába kerül.
 3. A `scripts/copy-manifest.mjs` bemásolja az `appsscript.json` fájlt a `build/` mappába.
-4. A `clasp push` a `build/` mappából tölti fel a fájlokat.
+4. A `clasp push` a `build/` mappa tartalmát tölti fel Apps Scriptbe.
 
-Ez azért hasznos, mert a Google Apps Script JavaScriptet kap, miközben te helyben TypeScriptben dolgozol.
-
-## Új projekt indítása ebből a skeletonból
-
-Ez a legfontosabb rész a repo használatához.
-
-### 1. Klónozd a skeleton projektet
-
-```bash
-git clone <YOUR_TEMPLATE_REPO_URL> my-new-sheet-project
-cd my-new-sheet-project
-```
-
-Ha szeretnéd, ezen a ponton át is nevezheted a projektet a saját igényeid szerint.
-
-### 2. Telepítsd a függőségeket
-
-```bash
-npm install
-```
-
-### 3. Hozz létre egy új Google Sheetet
-
-Nyisd meg a Google Drive-ot, és hozz létre egy új spreadsheetet.
-
-### 4. Hozd létre a Sheethez kötött Apps Script projektet
-
-A frissen létrehozott Google Sheetben nyisd meg:
-
-`Extensions > Apps Script`
-
-Ez létrehozza a Google Sheethez kötött bound Apps Script projektet.
-
-### 5. Másold ki a Script ID-t
-
-Az Apps Script editorban nyisd meg:
-
-`Project Settings > Script ID`
-
-Másold ki a megjelenő `Script ID` értéket.
-
-### 6. Hozd létre a helyi `.clasp.json` fájlt
-
-Másold le a minta konfigurációt:
-
-```bash
-cp .clasp.json.example .clasp.json
-```
-
-Ezután a `.clasp.json` fájlban cseréld le ezt:
-
-```json
-"scriptId": "PASTE_YOUR_SCRIPT_ID_HERE"
-```
-
-a saját Apps Script projekted valódi `Script ID`-jára.
-
-### 7. Jelentkezz be `clasp`-pal
-
-Ha még nem vagy bejelentkezve:
-
-```bash
-npx clasp login
-```
-
-Headless környezetben:
-
-```bash
-npx clasp login --no-localhost
-```
-
-### 8. Futtasd a buildet
+Elérhető npm parancsok:
 
 ```bash
 npm run build
-```
-
-### 9. Pushold fel a projektet
-
-```bash
+npm run watch
 npm run push
+npm run pull
 ```
 
-Ezzel a lokális TypeScript projekted felkerül a frissen létrehozott, Sheethez kötött Apps Script projektbe.
+Windows PowerShell alatt előfordulhat, hogy a rendszer execution policy miatt az `npm.ps1` wrapper nem futtatható. Ilyenkor használható a `npm.cmd`:
 
-## Fejlesztési workflow a későbbiekben
+```powershell
+npm.cmd run build
+```
 
-Miután az első kapcsolat létrejött, a tipikus napi workflow ez:
+## Első beállítás új Apps Script projekthez
 
-1. Módosítsd a kódot a `src/` mappában.
-2. Futtasd:
+1. Hozz létre vagy nyiss meg egy Google Sheetet.
+2. A Sheetben nyisd meg: `Extensions > Apps Script`.
+3. Az Apps Script editorban keresd meg a `Project Settings > Script ID` értéket.
+4. Másold le a `.clasp.json.example` fájlt `.clasp.json` néven.
+5. Írd be a valódi `scriptId` értéket.
+6. Jelentkezz be `clasp`-pal, ha még nem történt meg:
+
    ```bash
-   npm run build
+   npx clasp login
    ```
-3. Ha minden rendben:
+
+7. Build és feltöltés:
+
    ```bash
    npm run push
    ```
-4. Ellenőrizd a működést a Google Sheetben.
 
-Ha folyamatosan szeretnéd fordítani a TypeScriptet fejlesztés közben:
+8. A Sheet újratöltése után állítsd be a Drive célmappát:
 
-```bash
-npm run watch
-```
+   ```text
+   Iktatás > Drive célmappa beállítása
+   ```
 
-Fontos: a `watch` csak fordít, nem pushol automatikusan.
+   Itt megadható a meglévő Drive mappa ID-ja vagy teljes URL-je.
 
-## Elérhető npm parancsok
+## Fejlesztési megjegyzések
 
-- `npm run build`
-  Lefordítja a TypeScriptet és bemásolja a manifestet a `build/` mappába.
+- A `build/` mappa generált tartalom, kézzel ne ezt kell szerkeszteni.
+- A tényleges forráskód a `src/` mappában van.
+- A `.clasp.json` helyi konfiguráció, nem kerül verziókezelésbe.
+- A Drive célmappa azonosítója Script Property-ben tárolódik `TARGET_DRIVE_FOLDER_ID` néven.
+- A jelenlegi Gmail query csak olvasatlan inbox leveleket dolgoz fel.
+- A rendszer csak az üzenet olvasatlan állapota alapján nézi a feldolgozandó message-eket a threaden belül.
+- Inline képeket nem iktat, csak valódi csatolmányokat.
+- A feldolgozott sorok dátum alapján rendezve kapnak iktatószámot, majd a legújabbak kerülnek felülre.
+- A gyors iktatószám-generálás feltételezi, hogy a legfrissebb sor a fejléc alatti második sorban van.
+- A meglévő registry sorokon nem fut minden alkalommal teljes iktatószám-pótlás; ez 15 000+ soros munkalapnál szándékos teljesítményvédelmi döntés.
+- Az új sorok a régi iktatórendszer oszlopait kapják: a manuális mezők üresek, a `done` és `empReim` checkboxok alapértéke `false`.
+- Az email/csatolmány metaadatok a `meta` oszlopban vannak JSON-ként.
+- A deduplikáció a `metaMessageId` és `metaAttachmentIndex` oszlopokat használja, és nem olvassa be minden futáskor a teljes meta oszlopot.
+- A feltöltött Drive fájl neve az iktatószámmal kezdődik: `R0000001_eredeti-fajlnev.ext`.
+- A registry írás és az archiválás egy közös sikeres műveletsornak számít: hiba esetén a threadek `HIBA` labelt kapnak.
+- Ha a Drive feltöltés után a registry írás hibázik, a kód megpróbálja kukába tenni az adott futásban már feltöltött fájlokat.
 
-- `npm run watch`
-  Figyeli a `src/` mappa változásait és újrafordít.
+## Ismert korlátok
 
-- `npm run push`
-  Build után feltölti a `build/` mappa tartalmát az Apps Script projektbe.
+- Nincs automatikus trigger létrehozó segédfüggvény.
+- Nincs külön tesztkörnyezet vagy mockolt Apps Script teszt.
+- A `direction` mező automatikus kitöltése még TODO.
+- A `type`, `partner`, pénzügyi és dátum mezők egyelőre manuálisan töltendők.
+- A README-ben dokumentált működés a jelenlegi `src/code.ts` állapotot írja le.
 
-- `npm run pull`
-  Lehúzza a távoli Apps Script projekt aktuális tartalmát.
+## Tervezett következő lépések
 
-## Miért nincs verziózva a `.clasp.json`
+Várható következő fejlesztések:
 
-A `.clasp.json` tartalmazza az adott Google Apps Script projekt egyedi `scriptId` azonosítóját. Ez minden konkrét projektben más lesz, ezért a skeleton repo nem ezt a fájlt verziózza, hanem egy `.clasp.json.example` mintát ad hozzá.
-
-Ez azért jó, mert:
-
-- a skeleton újrafelhasználható marad;
-- nem kerül bele egy konkrét projektazonosító a template-be;
-- minden új projekt saját `scriptId`-val indulhat.
-
-## TypeScript beállítások
-
-A [tsconfig.json](tsconfig.json) fontosabb részei:
-
-- `rootDir: "src"`
-- `outDir: "build"`
-- `types: ["google-apps-script"]`
-- `strict: true`
-- `noEmitOnError: true`
-
-Ezek biztosítják, hogy a forrás a `src/` mappában legyen, a kimenet a `build/` mappába kerüljön, és a fordítás hibás kód esetén megálljon.
-
-## Minta kód
-
-A [src/code.ts](src/code.ts) jelenleg egy Gmail csatolmány-feldolgozó iktatási kiindulópontot tartalmaz:
-
-```ts
-function processUnreadInboxAttachments(): void
-```
-
-Ez megkeresi az olvasatlan inbox levelek csatolmányait, és a metaadataikat a `REGISTRY` munkalapra írja.
-
-## Fontos megjegyzések
-
-- A Google Apps Script végül JavaScriptet futtat, nem közvetlen TypeScriptet.
-- A `build/` mappa generált tartalom, kézzel nem ezt érdemes szerkeszteni.
-- A tényleges forráskódot mindig a `src/` mappában érdemes módosítani.
-- Ha megváltozik a kapcsolt Apps Script projekt, a helyi `.clasp.json` fájl `scriptId` értékét kell frissíteni.
-- A `clasp push` csak érvényes Google bejelentkezéssel működik.
+1. A `direction` mező automatikus kitöltése.
+2. Feltöltött Drive fájlok elnevezési és mappázási szabályainak finomítása.
+3. Automatikus trigger létrehozó segédfüggvény.
+4. README frissítése az új működés szerint.
