@@ -286,7 +286,7 @@ function getOrCreateRegistrySheet(): GoogleAppsScript.Spreadsheet.Sheet {
   const sheet = existingSheet ?? spreadsheet.insertSheet(REGISTRY_SHEET_NAME);
 
   ensureRegistryHeaders(sheet);
-  ensureRegistryNumbers(sheet);
+  ensureLatestRegistryNumber(sheet);
 
   return sheet;
 }
@@ -356,7 +356,7 @@ function ensureRegistryColumnCount(
   }
 }
 
-function ensureRegistryNumbers(sheet: GoogleAppsScript.Spreadsheet.Sheet): void {
+function ensureLatestRegistryNumber(sheet: GoogleAppsScript.Spreadsheet.Sheet): void {
   const lastRow = sheet.getLastRow();
 
   if (lastRow < FIRST_DATA_ROW) {
