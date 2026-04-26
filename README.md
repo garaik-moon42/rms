@@ -44,6 +44,7 @@ Az aktuális fejléc a régi iktatórendszer oszlopait követi:
 | `metaMessageId` | Gmail message azonosító technikai kereséshez és deduplikációhoz. |
 | `metaAttachmentIndex` | A csatolmány üzeneten belüli sorszáma technikai kereséshez és deduplikációhoz. |
 | `done` | Checkbox. Új iktatásnál `false`; manuális feldolgozás után kell bejelölni. |
+| `view` | Képletből generált megtekintési link a `googleDriveId` alapján. |
 | `direction` | Bejövő/kimenő irány. Később automatikusan tölthető; jelenleg üres. |
 | `partner` | Kapcsolódó partner neve. Manuálisan töltendő. |
 | `type` | Dokumentumtípus. Manuálisan választandó/töltendő. |
@@ -246,6 +247,7 @@ npm.cmd run build
 - Az email/csatolmány metaadatok a `meta` oszlopban vannak JSON-ként.
 - A deduplikáció a `metaMessageId` és `metaAttachmentIndex` oszlopokat használja, és nem olvassa be minden futáskor a teljes meta oszlopot.
 - A feltöltött Drive fájl neve az iktatószámmal kezdődik: `R0000001_eredeti-fajlnev.ext`.
+- A `view` oszlop új soroknál automatikusan `HYPERLINK` képletet kap a `googleDriveId` cellára hivatkozva.
 - A registry írás és az archiválás egy közös sikeres műveletsornak számít: hiba esetén a threadek `HIBA` labelt kapnak.
 - Ha a Drive feltöltés után a registry írás hibázik, a kód megpróbálja kukába tenni az adott futásban már feltöltött fájlokat.
 

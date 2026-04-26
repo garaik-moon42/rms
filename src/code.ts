@@ -11,6 +11,7 @@ const REGISTRY_HEADERS = [
   "metaMessageId",
   "metaAttachmentIndex",
   "done",
+  "view",
   "direction",
   "partner",
   "type",
@@ -30,8 +31,9 @@ const META_COLUMN = 2;
 const META_MESSAGE_ID_COLUMN = 3;
 const META_ATTACHMENT_INDEX_COLUMN = 4;
 const DONE_COLUMN = 5;
-const EMP_REIM_COLUMN = 9;
-const GOOGLE_DRIVE_ID_COLUMN = 12;
+const VIEW_COLUMN = 6;
+const EMP_REIM_COLUMN = 10;
+const GOOGLE_DRIVE_ID_COLUMN = 13;
 const FIRST_DATA_ROW = 2;
 
 type AttachmentMetadata = {
@@ -203,6 +205,7 @@ function collectThreadRows(
           "",
           "",
           "",
+          "",
           false,
           "",
           "",
@@ -248,7 +251,7 @@ function writeRegistryRowsAtTop(
   let rowsInserted = false;
 
   try {
-    for (const row of sortedRows) {
+    sortedRows.forEach((row, index) => {
       const registryNumber = String(row.values[0]);
       const driveFile = uploadAttachmentToDrive(
         targetFolder,
@@ -259,7 +262,10 @@ function writeRegistryRowsAtTop(
 
       uploadedFileIds.push(driveFileId);
       row.values[GOOGLE_DRIVE_ID_COLUMN - 1] = driveFileId;
-    }
+      row.values[VIEW_COLUMN - 1] = buildViewFormula(
+        FIRST_DATA_ROW + index,
+      );
+    });
 
     const rowValues = sortedRows.map((row) => row.values);
 
@@ -293,6 +299,7 @@ function getOrCreateRegistrySheet(): GoogleAppsScript.Spreadsheet.Sheet {
 
 function ensureRegistryHeaders(sheet: GoogleAppsScript.Spreadsheet.Sheet): void {
   ensureMetaColumns(sheet);
+  ensureViewColumn(sheet);
   ensureRegistryColumnCount(sheet);
 
   const headerRange = sheet.getRange(1, 1, 1, REGISTRY_HEADERS.length);
@@ -304,6 +311,25 @@ function ensureRegistryHeaders(sheet: GoogleAppsScript.Spreadsheet.Sheet): void 
   if (!hasExpectedHeaders) {
     headerRange.setValues([[...REGISTRY_HEADERS]]);
     sheet.setFrozenRows(1);
+  }
+}
+
+function ensureViewColumn(
+  sheet: GoogleAppsScript.Spreadsheet.Sheet,
+): void {
+  if (sheet.getMaxColumns() < VIEW_COLUMN) {
+    return;
+  }
+
+  const firstHeaders = sheet
+    .getRange(1, 1, 1, VIEW_COLUMN)
+    .getValues()[0];
+
+  if (
+    firstHeaders[DONE_COLUMN - 1] === "done" &&
+    firstHeaders[VIEW_COLUMN - 1] === "direction"
+  ) {
+    sheet.insertColumnBefore(VIEW_COLUMN);
   }
 }
 
@@ -510,6 +536,25 @@ function buildDriveFileName(registryNumber: string, originalFileName: string): s
   }
 
   return `${registryNumber}_${trimmedFileName}`;
+}
+
+function buildViewFormula(rowNumber: number): string {
+  return `=HYPERLINK("https://drive.google.com/open?id=" & ${columnToA1(
+    GOOGLE_DRIVE_ID_COLUMN,
+  )}${rowNumber}; "🔍")`;
+}
+
+function columnToA1(column: number): string {
+  let remainingColumn = column;
+  let columnName = "";
+
+  while (remainingColumn > 0) {
+    const remainder = (remainingColumn - 1) % 26;
+    columnName = String.fromCharCode(65 + remainder) + columnName;
+    remainingColumn = Math.floor((remainingColumn - remainder - 1) / 26);
+  }
+
+  return columnName;
 }
 
 function trashDriveFiles(fileIds: string[]): void {
