@@ -27,9 +27,10 @@ A feldolgozás menete:
 6. Az olvasatlan üzenetek nem inline csatolmányairól registry sorokat készít.
 7. A csatolmányokat feltölti a `TARGET_DRIVE_FOLDER_ID` Script Property-ben megadott Drive célmappába.
 8. A feltöltött Drive fájl ID-ját beírja a `googleDriveId` oszlopba.
-9. Az új sorokat a fejléc alá, a munkalap tetejére írja.
-10. Sikeres írás után az érintett threadeket olvasottra állítja és archiválja.
-11. Hiba esetén az érintett thread `HIBA` labelt kap, és a hiba bekerül a logba.
+9. Megpróbálja AI-val felismerni a dokumentumtípust, és kitölti a `type`, `notes`, valamint a `meta.ai` adatokat.
+10. Az új sorokat a fejléc alá, a munkalap tetejére írja.
+11. Sikeres írás után az érintett threadeket olvasottra állítja és archiválja.
+12. Hiba esetén az érintett thread `HIBA` labelt kap, és a hiba bekerül a logba.
 
 ## Registry munkalap
 
@@ -47,10 +48,10 @@ Az aktuális fejléc a régi iktatórendszer oszlopait követi:
 | `view` | Képletből generált megtekintési link a `googleDriveId` alapján. |
 | `direction` | Bejövő/kimenő irány. Később automatikusan tölthető; jelenleg üres. |
 | `partner` | Kapcsolódó partner neve. Manuálisan töltendő. |
-| `type` | Dokumentumtípus. Manuálisan választandó/töltendő. |
+| `type` | Dokumentumtípus. AI javaslatként tölthető; manuális ellenőrzést igényel. |
 | `empReim` | Checkbox. Kiküldetési rendelvényhez kapcsolódik-e; új iktatásnál `false`. |
 | `travelAuthRef` | Kapcsolódó kiküldetési rendelvény iktatószáma. Manuálisan töltendő. |
-| `notes` | Manuális feljegyzések. Új iktatásnál üres. |
+| `notes` | Kereshető dokumentumleírás vagy manuális feljegyzés. AI javaslatként tölthető. |
 | `googleDriveId` | A feltöltött dokumentum Google Drive file ID-ja. |
 | `id` | Dokumentum saját azonosítója, például számlasorszám. Manuálisan töltendő. |
 | `amount` | Dokumentumhoz kapcsolódó összeg. Manuálisan töltendő. |
@@ -129,9 +130,10 @@ A Sheet megnyitásakor az `onOpen()` függvény létrehoz egy egyedi menüt:
 ```text
 Iktatás > Olvasatlan levelek feldolgozása
 Iktatás > Drive célmappa beállítása
+Iktatás > OpenAI API kulcs beállítása
 ```
 
-Az első menüpont kézzel indítja a feldolgozást a Google Sheets felületéről. A második menüpont bekéri egy már meglévő Google Drive célmappa ID-ját vagy URL-jét, ellenőrzi, hogy a mappa elérhető-e, majd elmenti a `TARGET_DRIVE_FOLDER_ID` Script Property értékbe.
+Az első menüpont kézzel indítja a feldolgozást a Google Sheets felületéről. A második menüpont bekéri egy már meglévő Google Drive célmappa ID-ját vagy URL-jét, ellenőrzi, hogy a mappa elérhető-e, majd elmenti a `TARGET_DRIVE_FOLDER_ID` Script Property értékbe. A harmadik menüpont bekéri és Script Property-be menti az OpenAI API kulcsot.
 
 Később időzített trigger is hozzáadható, de jelenleg nincs automatikus trigger definiálva a repositoryban.
 
@@ -143,6 +145,7 @@ Az Apps Script manifest jelenlegi scope-jai:
 [
   "https://mail.google.com/",
   "https://www.googleapis.com/auth/drive",
+  "https://www.googleapis.com/auth/script.external_request",
   "https://www.googleapis.com/auth/spreadsheets.currentonly"
 ]
 ```
@@ -151,6 +154,7 @@ Ezek a jelenlegi működéshez szükségesek:
 
 - Gmail olvasás, label kezelés, olvasottra állítás és archiválás;
 - Google Drive célmappa ellenőrzése és csatolmányok feltöltése;
+- OpenAI API hívás `UrlFetchApp` használatával;
 - az aktuális Google Sheet írása.
 
 ## Projektstruktúra
@@ -166,13 +170,15 @@ Ezek a jelenlegi működéshez szükségesek:
 ├── scripts/
 │   └── copy-manifest.mjs
 ├── src/
+│   ├── ai.ts
 │   └── code.ts
 └── tsconfig.json
 ```
 
 Fontos fájlok:
 
-- `src/code.ts`: az Apps Script TypeScript forráskódja;
+- `src/code.ts`: az Apps Script iktatási workflow TypeScript forráskódja;
+- `src/ai.ts`: az OpenAI alapú dokumentumtípus-felismerés TypeScript forráskódja;
 - `appsscript.json`: Apps Script manifest, scope-okkal és runtime beállításokkal;
 - `scripts/copy-manifest.mjs`: build után bemásolja a manifestet a `build/` mappába;
 - `.clasp.json.example`: minta `clasp` konfiguráció;
@@ -251,15 +257,13 @@ npm.cmd run build
 - A registry írás és az archiválás egy közös sikeres műveletsornak számít: hiba esetén a threadek `HIBA` labelt kapnak.
 - Ha a Drive feltöltés után a registry írás hibázik, a kód megpróbálja kukába tenni az adott futásban már feltöltött fájlokat.
 
-## Tervezett AI support
+## AI support
 
-A következő nagy fejlesztési irány az iktatott dokumentumok AI alapú előfeldolgozása, hogy kevesebb mezőt kelljen kézzel kitölteni.
-
-Fontos: az AI support még nincs implementálva. Ez a szakasz a tervezett architektúrát és fejlesztési döntéseket rögzíti, hogy a munka másik gépen is folytatható legyen.
+Az iktatott dokumentumok AI alapú előfeldolgozásának első lépése a dokumentumtípus felismerése és egy kereshető összefoglaló készítése. A cél az, hogy kevesebb mezőt kelljen kézzel kitölteni, de az AI által kitöltött adatok továbbra is emberi ellenőrzést igényelnek.
 
 ### Forrásfájlok
 
-Az AI-val kapcsolatos kódot külön forrásfájlba érdemes tenni:
+Az AI-val kapcsolatos kód külön forrásfájlban van:
 
 ```text
 src/ai.ts
@@ -267,7 +271,7 @@ src/ai.ts
 
 A projekt jelenleg `module: "none"` TypeScript beállítással fordul Google Apps Scripthez. Emiatt az új fájlban ne legyen `import`/`export`; a függvények és típusok maradjanak globálisak, ahogy a jelenlegi `src/code.ts` esetén is.
 
-A `src/code.ts` feladata maradjon az iktatási workflow vezérlése: Gmail, Drive feltöltés, registry írás, archiválás. Az AI fájl feladata legyen a dokumentum típusának felismerése, később pedig a dokumentumtípushoz illeszkedő adatkinyerés.
+A `src/code.ts` feladata az iktatási workflow vezérlése: Gmail, Drive feltöltés, AI feldolgozás bekötése, registry írás, archiválás. Az AI fájl feladata a dokumentum típusának felismerése, később pedig a dokumentumtípushoz illeszkedő adatkinyerés.
 
 ### OpenAI konfiguráció
 
@@ -277,13 +281,21 @@ Az OpenAI API kulcs Script Property-ben legyen tárolva:
 OPENAI_API_KEY
 ```
 
-Javasolt későbbi menüpont:
+A menüpont:
 
 ```text
 Iktatás > OpenAI API kulcs beállítása
 ```
 
-Ez ugyanúgy működhet, mint a Drive célmappa beállítása: bekéri az értéket, validálja minimálisan, majd Script Property-be menti.
+Ez ugyanúgy működik, mint a Drive célmappa beállítása: bekéri az értéket, validálja minimálisan, majd Script Property-be menti.
+
+Az alapértelmezett modell a forráskódban:
+
+```text
+gpt-5.4-mini
+```
+
+Ez felülírható az `OPENAI_MODEL` Script Property értékkel.
 
 ### AI feldolgozási pipeline
 
@@ -295,7 +307,7 @@ Az AI feldolgozás kétlépcsős legyen.
 2. `extractDocumentFields`
    Későbbi lépés. A már ismert dokumentumtípus alapján célzottan próbálja kitölteni a registry mezőket.
 
-Első implementációban elég csak a `classifyDocument` lépést megvalósítani. Ez alacsonyabb kockázatú, és gyorsan ellenőrizhető, hogy a saját dokumentumokon mennyire megbízható a dokumentumtípus felismerése.
+Az első implementációban csak a `classifyDocument` jellegű lépés valósult meg. Ez alacsonyabb kockázatú, és gyorsan ellenőrizhető, hogy a saját dokumentumokon mennyire megbízható a dokumentumtípus felismerése.
 
 ### Első AI implementáció scope-ja
 
@@ -331,36 +343,74 @@ AI feldolgozás sikertelen: nem támogatott fájltípus vagy feldolgozási hiba.
 
 ### Dokumentumtípus felismerés
 
-A `type` mező dokumentumtípust jelent, nem fájlformátumot. Az AI első feladata legyen a dokumentumtípus meghatározása.
+A `type` mező dokumentumtípust jelent, nem fájlformátumot. Az AI első feladata legyen a dokumentumtípus meghatározása a kontrollált magyar típuslistából.
 
-Később érdemes kontrollált dokumentumtípus-listát kialakítani, például:
+Az aktuális dokumentumtípus-lista:
 
 ```text
-invoice
-receipt
-contract
-official_letter
-bank_statement
-travel_authorization
-other
-unknown
+Árajánlat
+Átadás-átvételi bizonylat
+Átutalásos számla
+Díjbekérő
+Egyéb levél
+Előleg számla
+Érvénytelenítő számla
+HR
+Kártyás számla
+Készpénzes számla
+Megrendelő
+Proforma számla
+Szállítólevél
+Számlával egy tekintet alá eső okirat
+Szerződés
+Sztornó számla
+Teljesítési igazolás
+Útelszámolás
 ```
 
-Ez a lista még nincs véglegesítve. Az első implementációban lehet szűkebb lista is, de az AI válasza legyen strukturált, és tartalmazzon confidence értéket.
+Az AI válasza legyen strukturált, és mindig tartalmazzon megbízhatósági értéket (`confidence`). Ez nem csak tájékoztató adat: a manuális ellenőrzésnél fontos jelzés, hogy a modell mennyire biztos a besorolásban. Több dokumentumtípus határa ember számára sem mindig egyértelmű, ezért a válasz tartalmazhat alternatív kategóriákat is.
+
+Fontos kategóriaértelmezési szabály: ha egy dokumentum forma szerint szerződés, de HR tartalmú, akkor `HR` típusba tartozik. Például egy munkaszerződés típusa `HR`, nem `Szerződés`.
 
 Javasolt classification válasz:
 
 ```json
 {
-  "type": "invoice",
-  "confidence": 0.86,
+  "type": "Átutalásos számla",
+  "confidence": 0.91,
   "language": "hu",
-  "notes": "Example Kft. 2026-00123 számú számla, bruttó 152400 HUF, kelte 2026-04-12, fizetési határidő 2026-04-27.",
-  "reason": "A dokumentum számlaszámot, eladót, vevőt, ÁFA összesítőt, végösszeget és fizetési határidőt tartalmaz."
+  "notes": "Example Kft. 2026-00123 számú átutalásos számlája, bruttó 152400 HUF, kelte 2026-04-12, fizetési határidő 2026-04-27.",
+  "reason": "A dokumentum számlaszámot, eladót, vevőt, ÁFA összesítőt, végösszeget és átutalásos fizetési módot tartalmaz.",
+  "alternatives": [
+    {
+      "type": "Díjbekérő",
+      "confidence": 0.06,
+      "reason": "Fizetési adatokat tartalmaz, de számlaszám és ÁFA összesítő is szerepel rajta."
+    }
+  ]
 }
 ```
 
-Alacsony confidence esetén a `type` legyen `unknown` vagy maradjon üres, a `notes` pedig jelezze az ellenőrzési igényt.
+Ha az AI nem tudja felismerni a dokumentumtípust, ne adjon vissza típust. Ilyenkor a registry `type` mezője maradjon üres, a `notes` mezőbe pedig rövid, embernek hasznos leírás kerüljön arról, hogy nem sikerült felismerni a dokumentumot és miért. A pontos típust ilyenkor a manuális ellenőrzés állapítja meg.
+
+Példa sikertelen felismerésre:
+
+```json
+{
+  "type": "",
+  "confidence": 0.28,
+  "language": "hu",
+  "notes": "AI típusfelismerés sikertelen: a dokumentum csak részben olvasható, és nem tartalmaz egyértelmű számla-, szerződés- vagy HR-jellemzőket.",
+  "reason": "A dokumentumból nem azonosítható megbízhatóan a jogi vagy üzleti funkció.",
+  "alternatives": [
+    {
+      "type": "Egyéb levél",
+      "confidence": 0.24,
+      "reason": "Általános levélre utaló töredékek vannak, de a tartalom nem elég egyértelmű."
+    }
+  ]
+}
+```
 
 ### Későbbi mezőkinyerés
 
@@ -398,13 +448,14 @@ Javasolt szerkezet:
   "ai": {
     "status": "success",
     "processedAt": "2026-04-26T12:00:00.000Z",
-    "model": "gpt-5",
+    "model": "gpt-5.4-mini",
     "classification": {
-      "type": "invoice",
+      "type": "Átutalásos számla",
       "confidence": 0.86,
       "language": "hu",
       "notes": "",
-      "reason": ""
+      "reason": "",
+      "alternatives": []
     },
     "extraction": null,
     "error": ""
@@ -439,22 +490,22 @@ Kezdeti elvárás:
 
 Javasolt kezelés:
 
-- PDF: közvetlen AI feldolgozás.
-- PNG: közvetlen AI feldolgozás.
-- JPEG / JPG: közvetlen AI feldolgozás.
-- TIFF: konvertálni kell PDF-re vagy PNG/JPEG-re, és utána feldolgozni.
-- DOCX: Google Drive-on keresztül PDF-re konvertálni, és a PDF-et feldolgozni.
+- PDF: közvetlen AI feldolgozás, implementálva.
+- PNG: közvetlen AI feldolgozás, implementálva.
+- JPEG / JPG: közvetlen AI feldolgozás, implementálva.
+- TIFF: konvertálni kell PDF-re vagy PNG/JPEG-re, ez még nincs implementálva.
+- DOCX: Google Drive-on keresztül PDF-re konvertálni, ez még nincs implementálva.
 
 Ha a fájl nem támogatott vagy nem konvertálható, ne akadjon meg az iktatás. Ilyenkor:
 
 - `done` maradjon `false`;
-- `type` maradjon üres vagy `unknown`;
+- `type` maradjon üres;
 - `notes` jelezze, hogy az AI feldolgozás sikertelen;
 - `meta.ai.status` legyen `failed`.
 
-### OpenAI API technikai javaslat
+### OpenAI API technikai megoldás
 
-Az AI integrációhoz a Responses API és strukturált JSON kimenet javasolt. A dokumentumot base64-ként vagy feltöltött file ID-ként lehet átadni. Apps Scriptből várhatóan a `UrlFetchApp` alapú direkt HTTP hívás lesz a legegyszerűbb, nem npm SDK.
+Az AI integráció a Responses API-t és strukturált JSON kimenetet használ. A dokumentum Apps Scriptből `UrlFetchApp` alapú direkt HTTP hívással, base64 data URL-ként kerül átadásra; nincs npm SDK használat.
 
 Az OpenAI API kulcsot minden hívásnál Script Property-ből kell olvasni:
 
@@ -462,25 +513,24 @@ Az OpenAI API kulcsot minden hívásnál Script Property-ből kell olvasni:
 OPENAI_API_KEY
 ```
 
-Az API hívásnak szigorú JSON schema alapján kell választ kérnie, hogy ne kelljen szabad szövegű modellválaszt parse-olni.
+Az API hívás szigorú JSON schema alapján kér választ, hogy ne kelljen szabad szövegű modellválaszt parse-olni.
 
 ## Ismert korlátok
 
 - Nincs automatikus trigger létrehozó segédfüggvény.
 - Nincs külön tesztkörnyezet vagy mockolt Apps Script teszt.
 - A `direction` mező automatikus kitöltése még TODO.
-- A `type`, `partner`, pénzügyi és dátum mezők egyelőre manuálisan töltendők.
-- Az AI support még csak tervezett funkció, nincs implementálva.
-- A README-ben dokumentált működés a jelenlegi `src/code.ts` állapotot írja le.
+- A `partner`, pénzügyi és dátum mezők egyelőre manuálisan töltendők.
+- Az AI jelenleg csak PDF, PNG és JPEG/JPG fájlokat dolgoz fel közvetlenül.
+- A TIFF és DOCX konverzió még nincs implementálva.
+- A README-ben dokumentált működés a jelenlegi `src/code.ts` és `src/ai.ts` állapotot írja le.
 
 ## Tervezett következő lépések
 
 Várható következő fejlesztések:
 
 1. A `direction` mező automatikus kitöltése.
-2. AI alapú dokumentumtípus-felismerés `src/ai.ts` fájlban.
-3. AI válasz mentése a `meta.ai` blokkba.
-4. Későbbi AI mezőkinyerés dokumentumtípusonkénti sémákkal.
-5. Feltöltött Drive fájlok elnevezési és mappázási szabályainak finomítása.
-6. Automatikus trigger létrehozó segédfüggvény.
-7. README frissítése az új működés szerint.
+2. TIFF és DOCX konverzió az AI feldolgozáshoz.
+3. Későbbi AI mezőkinyerés dokumentumtípusonkénti sémákkal.
+4. Feltöltött Drive fájlok elnevezési és mappázási szabályainak finomítása.
+5. Automatikus trigger létrehozó segédfüggvény.

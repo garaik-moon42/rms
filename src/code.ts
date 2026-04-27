@@ -32,7 +32,9 @@ const META_MESSAGE_ID_COLUMN = 3;
 const META_ATTACHMENT_INDEX_COLUMN = 4;
 const DONE_COLUMN = 5;
 const VIEW_COLUMN = 6;
+const TYPE_COLUMN = 9;
 const EMP_REIM_COLUMN = 10;
+const NOTES_COLUMN = 12;
 const GOOGLE_DRIVE_ID_COLUMN = 13;
 const FIRST_DATA_ROW = 2;
 
@@ -59,6 +61,7 @@ function onOpen(): void {
     .createMenu("Iktatás")
     .addItem("Olvasatlan levelek feldolgozása", "processUnreadInboxAttachments")
     .addItem("Drive célmappa beállítása", "setTargetDriveFolderId")
+    .addItem("OpenAI API kulcs beállítása", "setOpenAiApiKey")
     .addToUi();
 }
 
@@ -264,6 +267,14 @@ function writeRegistryRowsAtTop(
       row.values[GOOGLE_DRIVE_ID_COLUMN - 1] = driveFileId;
       row.values[VIEW_COLUMN - 1] = buildViewFormula(
         FIRST_DATA_ROW + index,
+      );
+
+      const aiResult = classifyDocumentAttachment(row.attachment);
+      row.values[TYPE_COLUMN - 1] = aiResult.type;
+      row.values[NOTES_COLUMN - 1] = aiResult.notes;
+      row.values[META_COLUMN - 1] = addAiMetadataToMetaJson(
+        row.values[META_COLUMN - 1],
+        aiResult.ai,
       );
     });
 
@@ -637,6 +648,19 @@ function parseAttachmentMetadata(metadataJson: string): AttachmentMetadata | nul
     console.warn("Could not parse attachment metadata", { error });
 
     return null;
+  }
+}
+
+function addAiMetadataToMetaJson(metadataJson: unknown, ai: AiMetadata): string {
+  try {
+    const metadata = JSON.parse(String(metadataJson)) as Record<string, unknown>;
+    metadata.ai = ai;
+
+    return JSON.stringify(metadata, null, 2);
+  } catch (error) {
+    console.warn("Could not add AI metadata to attachment metadata", { error });
+
+    return JSON.stringify({ ai }, null, 2);
   }
 }
 
