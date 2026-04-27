@@ -2,6 +2,8 @@ const OPENAI_API_KEY_PROPERTY = "OPENAI_API_KEY";
 const OPENAI_MODEL_PROPERTY = "OPENAI_MODEL";
 const DEFAULT_OPENAI_MODEL = "gpt-5.4-mini";
 const OPENAI_RESPONSES_ENDPOINT = "https://api.openai.com/v1/responses";
+const INBOUND_DIRECTION_VALUE = "be ◄";
+const OUTBOUND_DIRECTION_VALUE = "ki ►";
 
 const DOCUMENT_TYPES = [
   "Árajánlat",
@@ -42,18 +44,42 @@ type DocumentClassification = {
   alternatives: DocumentClassificationAlternative[];
 };
 
+type DocumentExtraction = {
+  direction: string;
+  partner: string;
+  id: string;
+  amount: string;
+  currency: string;
+  refDate: string;
+  dueDate: string;
+  confidence: number;
+  reason: string;
+};
+
+type DocumentAnalysis = {
+  classification: DocumentClassification;
+  extraction: DocumentExtraction;
+};
+
 type AiMetadata = {
   status: AiStatus;
   processedAt: string;
   model: string;
   classification: DocumentClassification | null;
-  extraction: null;
+  extraction: DocumentExtraction | null;
   error: string;
 };
 
 type AiDocumentProcessingResult = {
+  direction: string;
+  partner: string;
   type: string;
   notes: string;
+  id: string;
+  amount: string;
+  currency: string;
+  refDate: string;
+  dueDate: string;
   ai: AiMetadata;
 };
 
@@ -91,54 +117,35 @@ function classifyDocumentAttachment(
 
   try {
     const apiKey = getOpenAiApiKey();
-    const inputContent = buildDocumentClassificationInputContent(attachment);
-    const response = UrlFetchApp.fetch(OPENAI_RESPONSES_ENDPOINT, {
-      method: "post",
-      contentType: "application/json",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-      },
-      muteHttpExceptions: true,
-      payload: JSON.stringify({
-        model,
-        input: [
-          {
-            role: "system",
-            content: [
-              {
-                type: "input_text",
-                text: buildDocumentClassificationInstructions(),
-              },
-            ],
-          },
-          {
-            role: "user",
-            content: inputContent,
-          },
-        ],
-        text: {
-          format: buildDocumentClassificationTextFormat(),
-        },
-      }),
-    });
-    const statusCode = response.getResponseCode();
-    const responseText = response.getContentText();
-
-    if (statusCode < 200 || statusCode >= 300) {
-      throw new Error(`OpenAI API error ${statusCode}: ${truncateText(responseText, 500)}`);
-    }
-
-    const classification = parseDocumentClassificationResponse(responseText);
+    const responseText = fetchOpenAiStructuredResponse(
+      apiKey,
+      model,
+      buildDocumentAnalysisInstructions(),
+      buildDocumentInputContent(attachment),
+      buildDocumentAnalysisTextFormat(),
+    );
+    const analysis = parseDocumentAnalysisResponse(responseText);
+    const classification = analysis.classification;
+    const extraction = classification.type === ""
+      ? buildEmptyDocumentExtraction()
+      : analysis.extraction;
 
     return {
+      direction: extraction.direction,
+      partner: extraction.partner,
       type: classification.type,
       notes: classification.notes,
+      id: extraction.id,
+      amount: extraction.amount,
+      currency: extraction.currency,
+      refDate: extraction.refDate,
+      dueDate: extraction.dueDate,
       ai: {
         status: "success",
         processedAt,
         model,
         classification,
-        extraction: null,
+        extraction,
         error: "",
       },
     };
@@ -146,8 +153,15 @@ function classifyDocumentAttachment(
     const errorMessage = getErrorMessage(error);
 
     return {
+      direction: "",
+      partner: "",
       type: "",
       notes: `AI típusfelismerés sikertelen: ${errorMessage}`,
+      id: "",
+      amount: "",
+      currency: "",
+      refDate: "",
+      dueDate: "",
       ai: {
         status: "failed",
         processedAt,
@@ -180,7 +194,53 @@ function getOpenAiModel(): string {
   return model?.trim() || DEFAULT_OPENAI_MODEL;
 }
 
-function buildDocumentClassificationInputContent(
+function fetchOpenAiStructuredResponse(
+  apiKey: string,
+  model: string,
+  instructions: string,
+  inputContent: object[],
+  textFormat: object,
+): string {
+  const response = UrlFetchApp.fetch(OPENAI_RESPONSES_ENDPOINT, {
+    method: "post",
+    contentType: "application/json",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+    },
+    muteHttpExceptions: true,
+    payload: JSON.stringify({
+      model,
+      input: [
+        {
+          role: "system",
+          content: [
+            {
+              type: "input_text",
+              text: instructions,
+            },
+          ],
+        },
+        {
+          role: "user",
+          content: inputContent,
+        },
+      ],
+      text: {
+        format: textFormat,
+      },
+    }),
+  });
+  const statusCode = response.getResponseCode();
+  const responseText = response.getContentText();
+
+  if (statusCode < 200 || statusCode >= 300) {
+    throw new Error(`OpenAI API error ${statusCode}: ${truncateText(responseText, 500)}`);
+  }
+
+  return responseText;
+}
+
+function buildDocumentInputContent(
   attachment: GoogleAppsScript.Gmail.GmailAttachment,
 ): object[] {
   const fileName = attachment.getName();
@@ -219,68 +279,92 @@ function buildDocumentClassificationInputContent(
   throw new Error(`nem támogatott fájltípus az AI feldolgozáshoz: ${mimeType}`);
 }
 
-function buildDocumentClassificationInstructions(): string {
+function buildDocumentAnalysisInstructions(): string {
   return [
-    "Magyar iktatórendszer dokumentumtípus-felismerő komponense vagy.",
-    "A feladatod a csatolt dokumentum üzleti vagy jogi típusának meghatározása.",
-    "A type mező csak a megadott típuslista egyik értéke vagy üres string lehet.",
+    "Magyar iktatórendszer dokumentumelemző komponense vagy.",
+    "A feladatod a csatolt dokumentum üzleti vagy jogi típusának meghatározása, majd a registry mezők célzott kinyerése.",
+    "Egyetlen strukturált JSON választ adj, classification és extraction objektummal.",
+    "A classification.type mező csak a megadott típuslista egyik értéke vagy üres string lehet.",
     "Ha nem ismerhető fel megbízhatóan a dokumentum típusa, a type legyen üres string.",
-    "Ilyenkor a notes röviden írja le, hogy nem sikerült felismerni a dokumentumot és miért.",
-    "A confidence 0 és 1 közötti szám legyen, és tükrözze a tényleges bizonyosságot.",
-    "A notes embernek hasznos, kereshető összefoglaló legyen, ne technikai log.",
+    "Ilyenkor a classification.notes röviden írja le, hogy nem sikerült felismerni a dokumentumot és miért, az extraction mezői pedig maradjanak üresek.",
+    "Minden confidence 0 és 1 közötti szám legyen, és tükrözze a tényleges bizonyosságot.",
+    "A classification.notes embernek hasznos, kereshető összefoglaló legyen, ne technikai log.",
     "Ha egy dokumentum forma szerint szerződés, de HR tartalmú, akkor HR típusba tartozik. Például egy munkaszerződés típusa HR.",
+    "Csak olyan mezőt tölts ki, amelyet a dokumentum tényleges tartalma alátámaszt.",
+    "Ha egy extraction mező nem egyértelmű vagy nem található, üres stringet adj vissza.",
+    "Ne töltsd az empReim és travelAuthRef mezőket; ezek nincsenek ebben a sémában.",
+    `extraction.direction: csak "${INBOUND_DIRECTION_VALUE}", "${OUTBOUND_DIRECTION_VALUE}" vagy üres string lehet. "${INBOUND_DIRECTION_VALUE}" jelentése bejövő, "${OUTBOUND_DIRECTION_VALUE}" jelentése kimenő. Csak akkor töltsd, ha a dokumentumból egyértelmű. Egy beérkező szállítói számla tipikusan "${INBOUND_DIRECTION_VALUE}", egy saját kibocsátású ajánlat vagy számla tipikusan "${OUTBOUND_DIRECTION_VALUE}".`,
+    "extraction.partner: a legfontosabb kapcsolódó fél neve. Számlánál tipikusan a partner, szerződésnél a másik fél, HR dokumentumnál a munkavállaló vagy érintett személy.",
+    "extraction.id: a dokumentum saját azonosítója, például számlaszám, ajánlatszám, szerződésszám, rendelésazonosító vagy ügyazonosító.",
+    "extraction.amount: a dokumentum fő összege, lehetőleg bruttó vagy fizetendő végösszeg. Csak számként vagy számformátumú szövegként add meg, devizanem nélkül.",
+    "extraction.currency: hárombetűs ISO devizakód, például HUF, EUR vagy USD.",
+    "extraction.refDate: a dokumentum fő dátuma YYYY-MM-DD formátumban, például számla kelte, szerződés dátuma vagy teljesítés dátuma.",
+    "extraction.dueDate: fizetési határidő, lejárat vagy teljesítési határidő YYYY-MM-DD formátumban.",
+    "extraction.confidence: a mezőkinyerés egészére vonatkozó megbízhatóság.",
     `Típuslista: ${DOCUMENT_TYPES.join(", ")}.`,
   ].join("\n");
 }
 
-function buildDocumentClassificationTextFormat(): object {
+function buildDocumentAnalysisTextFormat(): object {
   return {
     type: "json_schema",
-    name: "document_classification",
+    name: "document_analysis",
     strict: true,
     schema: {
       type: "object",
       additionalProperties: false,
-      required: ["type", "confidence", "language", "notes", "reason", "alternatives"],
+      required: ["classification", "extraction"],
       properties: {
-        type: {
-          type: "string",
-          enum: ["", ...DOCUMENT_TYPES],
-        },
-        confidence: {
-          type: "number",
-          minimum: 0,
-          maximum: 1,
-        },
-        language: {
-          type: "string",
-          description: "A dokumentum elsődleges nyelve ISO 639-1 kóddal, például hu, en vagy de.",
-        },
-        notes: {
-          type: "string",
-        },
-        reason: {
-          type: "string",
-        },
-        alternatives: {
-          type: "array",
-          items: {
-            type: "object",
-            additionalProperties: false,
-            required: ["type", "confidence", "reason"],
-            properties: {
-              type: {
-                type: "string",
-                enum: DOCUMENT_TYPES,
-              },
-              confidence: {
-                type: "number",
-                minimum: 0,
-                maximum: 1,
-              },
-              reason: {
-                type: "string",
-              },
+        classification: buildDocumentClassificationSchema(),
+        extraction: buildDocumentExtractionSchema(),
+      },
+    },
+  };
+}
+
+function buildDocumentClassificationSchema(): object {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["type", "confidence", "language", "notes", "reason", "alternatives"],
+    properties: {
+      type: {
+        type: "string",
+        enum: ["", ...DOCUMENT_TYPES],
+      },
+      confidence: {
+        type: "number",
+        minimum: 0,
+        maximum: 1,
+      },
+      language: {
+        type: "string",
+        description: "A dokumentum elsődleges nyelve ISO 639-1 kóddal, például hu, en vagy de.",
+      },
+      notes: {
+        type: "string",
+      },
+      reason: {
+        type: "string",
+      },
+      alternatives: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["type", "confidence", "reason"],
+          properties: {
+            type: {
+              type: "string",
+              enum: DOCUMENT_TYPES,
+            },
+            confidence: {
+              type: "number",
+              minimum: 0,
+              maximum: 1,
+            },
+            reason: {
+              type: "string",
             },
           },
         },
@@ -289,7 +373,60 @@ function buildDocumentClassificationTextFormat(): object {
   };
 }
 
-function parseDocumentClassificationResponse(responseText: string): DocumentClassification {
+function buildDocumentExtractionSchema(): object {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "direction",
+      "partner",
+      "id",
+      "amount",
+      "currency",
+      "refDate",
+      "dueDate",
+      "confidence",
+      "reason",
+    ],
+    properties: {
+      direction: {
+        type: "string",
+        enum: ["", INBOUND_DIRECTION_VALUE, OUTBOUND_DIRECTION_VALUE],
+      },
+      partner: {
+        type: "string",
+      },
+      id: {
+        type: "string",
+      },
+      amount: {
+        type: "string",
+      },
+      currency: {
+        type: "string",
+        pattern: "^$|^[A-Z]{3}$",
+      },
+      refDate: {
+        type: "string",
+        pattern: "^$|^\\d{4}-\\d{2}-\\d{2}$",
+      },
+      dueDate: {
+        type: "string",
+        pattern: "^$|^\\d{4}-\\d{2}-\\d{2}$",
+      },
+      confidence: {
+        type: "number",
+        minimum: 0,
+        maximum: 1,
+      },
+      reason: {
+        type: "string",
+      },
+    },
+  };
+}
+
+function parseDocumentAnalysisResponse(responseText: string): DocumentAnalysis {
   const parsedResponse = JSON.parse(responseText) as {
     output_text?: unknown;
     output?: Array<{
@@ -301,9 +438,15 @@ function parseDocumentClassificationResponse(responseText: string): DocumentClas
     }>;
   };
   const outputText = extractOpenAiOutputText(parsedResponse);
-  const parsedClassification = JSON.parse(outputText) as Partial<DocumentClassification>;
+  const parsedAnalysis = JSON.parse(outputText) as {
+    classification?: Partial<DocumentClassification>;
+    extraction?: Partial<DocumentExtraction>;
+  };
 
-  return normalizeDocumentClassification(parsedClassification);
+  return {
+    classification: normalizeDocumentClassification(parsedAnalysis.classification ?? {}),
+    extraction: normalizeDocumentExtraction(parsedAnalysis.extraction ?? {}),
+  };
 }
 
 function extractOpenAiOutputText(response: {
@@ -376,6 +519,36 @@ function normalizeDocumentClassificationAlternative(
   };
 }
 
+function normalizeDocumentExtraction(
+  extraction: Partial<DocumentExtraction>,
+): DocumentExtraction {
+  return {
+    direction: normalizeDirection(extraction.direction),
+    partner: truncateText(String(extraction.partner ?? ""), 500),
+    id: truncateText(String(extraction.id ?? ""), 200),
+    amount: normalizeAmount(extraction.amount),
+    currency: normalizeCurrency(extraction.currency),
+    refDate: normalizeDateString(extraction.refDate),
+    dueDate: normalizeDateString(extraction.dueDate),
+    confidence: clampConfidence(extraction.confidence),
+    reason: truncateText(String(extraction.reason ?? ""), 1000),
+  };
+}
+
+function buildEmptyDocumentExtraction(): DocumentExtraction {
+  return {
+    direction: "",
+    partner: "",
+    id: "",
+    amount: "",
+    currency: "",
+    refDate: "",
+    dueDate: "",
+    confidence: 0,
+    reason: "",
+  };
+}
+
 function normalizeDocumentType(value: unknown): DocumentType | "" {
   if (typeof value !== "string") {
     return "";
@@ -396,6 +569,38 @@ function clampConfidence(value: unknown): number {
   }
 
   return Math.min(1, Math.max(0, confidence));
+}
+
+function normalizeDirection(value: unknown): string {
+  if (value === INBOUND_DIRECTION_VALUE || value === OUTBOUND_DIRECTION_VALUE) {
+    return value;
+  }
+
+  if (value === "bejövő") {
+    return INBOUND_DIRECTION_VALUE;
+  }
+
+  if (value === "kimenő") {
+    return OUTBOUND_DIRECTION_VALUE;
+  }
+
+  return "";
+}
+
+function normalizeAmount(value: unknown): string {
+  return truncateText(String(value ?? "").trim(), 100);
+}
+
+function normalizeCurrency(value: unknown): string {
+  const currency = String(value ?? "").trim().toUpperCase();
+
+  return /^[A-Z]{3}$/.test(currency) ? currency : "";
+}
+
+function normalizeDateString(value: unknown): string {
+  const dateString = String(value ?? "").trim();
+
+  return /^\d{4}-\d{2}-\d{2}$/.test(dateString) ? dateString : "";
 }
 
 function isSupportedImageMimeType(mimeType: string): boolean {

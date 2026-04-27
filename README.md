@@ -27,7 +27,7 @@ A feldolgozás menete:
 6. Az olvasatlan üzenetek nem inline csatolmányairól registry sorokat készít.
 7. A csatolmányokat feltölti a `TARGET_DRIVE_FOLDER_ID` Script Property-ben megadott Drive célmappába.
 8. A feltöltött Drive fájl ID-ját beírja a `googleDriveId` oszlopba.
-9. Megpróbálja AI-val felismerni a dokumentumtípust, és kitölti a `type`, `notes`, valamint a `meta.ai` adatokat.
+9. Megpróbálja AI-val felismerni a dokumentumtípust, majd a dokumentumtípus alapján kitölti a támogatott registry mezőket és a `meta.ai` adatokat.
 10. Az új sorokat a fejléc alá, a munkalap tetejére írja.
 11. Sikeres írás után az érintett threadeket olvasottra állítja és archiválja.
 12. Hiba esetén az érintett thread `HIBA` labelt kap, és a hiba bekerül a logba.
@@ -46,18 +46,18 @@ Az aktuális fejléc a régi iktatórendszer oszlopait követi:
 | `metaAttachmentIndex` | A csatolmány üzeneten belüli sorszáma technikai kereséshez és deduplikációhoz. |
 | `done` | Checkbox. Új iktatásnál `false`; manuális feldolgozás után kell bejelölni. |
 | `view` | Képletből generált megtekintési link a `googleDriveId` alapján. |
-| `direction` | Bejövő/kimenő irány. Később automatikusan tölthető; jelenleg üres. |
-| `partner` | Kapcsolódó partner neve. Manuálisan töltendő. |
+| `direction` | Bejövő/kimenő irány. AI javaslatként tölthető; értéke `be ◄`, `ki ►` vagy bizonytalanság esetén üres. |
+| `partner` | Kapcsolódó partner neve. AI javaslatként tölthető. |
 | `type` | Dokumentumtípus. AI javaslatként tölthető; manuális ellenőrzést igényel. |
 | `empReim` | Checkbox. Kiküldetési rendelvényhez kapcsolódik-e; új iktatásnál `false`. |
 | `travelAuthRef` | Kapcsolódó kiküldetési rendelvény iktatószáma. Manuálisan töltendő. |
 | `notes` | Kereshető dokumentumleírás vagy manuális feljegyzés. AI javaslatként tölthető. |
 | `googleDriveId` | A feltöltött dokumentum Google Drive file ID-ja. |
-| `id` | Dokumentum saját azonosítója, például számlasorszám. Manuálisan töltendő. |
-| `amount` | Dokumentumhoz kapcsolódó összeg. Manuálisan töltendő. |
-| `currency` | Összeg devizaneme 3 karakteres kóddal. Manuálisan töltendő. |
-| `refDate` | Dokumentumhoz kapcsolódó dátum, például számla kelte. Manuálisan töltendő. |
-| `dueDate` | Dokumentumhoz kapcsolódó határidő. Manuálisan töltendő. |
+| `id` | Dokumentum saját azonosítója, például számlasorszám. AI javaslatként tölthető. |
+| `amount` | Dokumentumhoz kapcsolódó összeg. AI javaslatként tölthető. |
+| `currency` | Összeg devizaneme 3 karakteres kóddal. AI javaslatként tölthető. |
+| `refDate` | Dokumentumhoz kapcsolódó dátum, például számla kelte. AI javaslatként tölthető. |
+| `dueDate` | Dokumentumhoz kapcsolódó határidő. AI javaslatként tölthető. |
 
 A kód a fejlécsort ezekre az oszlopokra állítja. Ha egy korábbi `REGISTRY` munkalapon hiányoznak a `seq` utáni meta oszlopok, akkor beszúrja őket, hogy a régi adatok a megfelelő oszlopok alatt maradjanak.
 
@@ -259,7 +259,7 @@ npm.cmd run build
 
 ## AI support
 
-Az iktatott dokumentumok AI alapú előfeldolgozásának első lépése a dokumentumtípus felismerése és egy kereshető összefoglaló készítése. A cél az, hogy kevesebb mezőt kelljen kézzel kitölteni, de az AI által kitöltött adatok továbbra is emberi ellenőrzést igényelnek.
+Az iktatott dokumentumok AI alapú előfeldolgozása két részből áll: dokumentumtípus felismerése és dokumentumtípus alapján célzott mezőkinyerés. A cél az, hogy kevesebb mezőt kelljen kézzel kitölteni, de az AI által kitöltött adatok továbbra is emberi ellenőrzést igényelnek.
 
 ### Forrásfájlok
 
@@ -299,22 +299,29 @@ Ez felülírható az `OPENAI_MODEL` Script Property értékkel.
 
 ### AI feldolgozási pipeline
 
-Az AI feldolgozás kétlépcsős legyen.
+Az AI logikailag két részből áll, de technikailag egyetlen OpenAI hívásban fut le, hogy a dokumentumot ne kelljen kétszer elküldeni.
 
 1. `classifyDocument`
    Meghatározza a dokumentum típusát és ad egy rövid, kereshető összefoglalót.
 
 2. `extractDocumentFields`
-   Későbbi lépés. A már ismert dokumentumtípus alapján célzottan próbálja kitölteni a registry mezőket.
+   A már ismert dokumentumtípus alapján célzottan próbálja kitölteni a registry mezőket.
 
-Az első implementációban csak a `classifyDocument` jellegű lépés valósult meg. Ez alacsonyabb kockázatú, és gyorsan ellenőrizhető, hogy a saját dokumentumokon mennyire megbízható a dokumentumtípus felismerése.
+Az egyetlen strukturált válasz `classification` és `extraction` objektumot tartalmaz. Ha a dokumentumtípus nem felismerhető, a `classification.type` üres, és az `extraction` mezői is üresek maradnak.
 
-### Első AI implementáció scope-ja
+### AI mezőkitöltési scope
 
-Első körben az AI csak ezeket töltse:
+Az AI jelenleg ezeket töltheti:
 
+- `direction`
+- `partner`
 - `type`
 - `notes`
+- `id`
+- `amount`
+- `currency`
+- `refDate`
+- `dueDate`
 
 Ne töltse:
 
@@ -412,9 +419,9 @@ Példa sikertelen felismerésre:
 }
 ```
 
-### Későbbi mezőkinyerés
+### Mezőkinyerés
 
-A második lépcsőben, amikor a dokumentumtípus már ismert, az AI típusfüggő séma alapján töltheti a mezőket:
+A második lépcsőben, amikor a dokumentumtípus már ismert, az AI típusfüggő instrukció alapján töltheti a mezőket:
 
 - `direction`
 - `partner`
@@ -426,7 +433,17 @@ A második lépcsőben, amikor a dokumentumtípus már ismert, az AI típusfügg
 
 Az `empReim` és `travelAuthRef` mezőket egyelőre ne töltse az AI.
 
-A mezőkinyeréshez dokumentumtípusonként más prompt és JSON schema javasolt. Például számlánál más mezők relevánsak, mint szerződésnél.
+A mezőkinyerés szigorú JSON schema alapján történik. Minden mező üres string lehet, mert a rendszer nem akar kikényszeríteni bizonytalan adatot. Az AI csak akkor tölthet mezőt, ha azt a dokumentum tényleges tartalma alátámasztja.
+
+A mezők jelentése:
+
+- `direction`: `be ◄`, `ki ►` vagy üres, ha nem egyértelmű;
+- `partner`: a legfontosabb kapcsolódó fél neve;
+- `id`: dokumentumazonosító, például számlaszám, ajánlatszám, szerződésszám vagy rendelésazonosító;
+- `amount`: a fő összeg, lehetőleg bruttó vagy fizetendő végösszeg, devizanem nélkül;
+- `currency`: 3 karakteres ISO devizakód;
+- `refDate`: fő dokumentumdátum `YYYY-MM-DD` formátumban;
+- `dueDate`: határidő, lejárat vagy fizetési határidő `YYYY-MM-DD` formátumban.
 
 ### Meta JSON bővítése
 
@@ -457,7 +474,17 @@ Javasolt szerkezet:
       "reason": "",
       "alternatives": []
     },
-    "extraction": null,
+    "extraction": {
+      "direction": "be ◄",
+      "partner": "Example Kft.",
+      "id": "2026-00123",
+      "amount": "152400",
+      "currency": "HUF",
+      "refDate": "2026-04-12",
+      "dueDate": "2026-04-27",
+      "confidence": 0.82,
+      "reason": "A számla fejlécében szerepel a számlaszám, a végösszeg, a deviza, a kelte és a fizetési határidő."
+    },
     "error": ""
   }
 }
@@ -505,7 +532,7 @@ Ha a fájl nem támogatott vagy nem konvertálható, ne akadjon meg az iktatás.
 
 ### OpenAI API technikai megoldás
 
-Az AI integráció a Responses API-t és strukturált JSON kimenetet használ. A dokumentum Apps Scriptből `UrlFetchApp` alapú direkt HTTP hívással, base64 data URL-ként kerül átadásra; nincs npm SDK használat.
+Az AI integráció a Responses API-t és strukturált JSON kimenetet használ. A dokumentum Apps Scriptből `UrlFetchApp` alapú direkt HTTP hívással, base64 data URL-ként kerül átadásra; nincs npm SDK használat. A típusfelismerés és mezőkinyerés egy közös API hívásban történik, hogy a dokumentumot csak egyszer kelljen elküldeni az OpenAI felé.
 
 Az OpenAI API kulcsot minden hívásnál Script Property-ből kell olvasni:
 
@@ -519,8 +546,7 @@ Az API hívás szigorú JSON schema alapján kér választ, hogy ne kelljen szab
 
 - Nincs automatikus trigger létrehozó segédfüggvény.
 - Nincs külön tesztkörnyezet vagy mockolt Apps Script teszt.
-- A `direction` mező automatikus kitöltése még TODO.
-- A `partner`, pénzügyi és dátum mezők egyelőre manuálisan töltendők.
+- Az AI által töltött mezők továbbra is emberi ellenőrzést igényelnek.
 - Az AI jelenleg csak PDF, PNG és JPEG/JPG fájlokat dolgoz fel közvetlenül.
 - A TIFF és DOCX konverzió még nincs implementálva.
 - A README-ben dokumentált működés a jelenlegi `src/code.ts` és `src/ai.ts` állapotot írja le.
@@ -529,8 +555,7 @@ Az API hívás szigorú JSON schema alapján kér választ, hogy ne kelljen szab
 
 Várható következő fejlesztések:
 
-1. A `direction` mező automatikus kitöltése.
-2. TIFF és DOCX konverzió az AI feldolgozáshoz.
-3. Későbbi AI mezőkinyerés dokumentumtípusonkénti sémákkal.
-4. Feltöltött Drive fájlok elnevezési és mappázási szabályainak finomítása.
-5. Automatikus trigger létrehozó segédfüggvény.
+1. TIFF és DOCX konverzió az AI feldolgozáshoz.
+2. Dokumentumtípusonként finomított mezőkinyerési instrukciók és sémák.
+3. Feltöltött Drive fájlok elnevezési és mappázási szabályainak finomítása.
+4. Automatikus trigger létrehozó segédfüggvény.

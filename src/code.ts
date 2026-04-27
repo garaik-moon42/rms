@@ -32,10 +32,17 @@ const META_MESSAGE_ID_COLUMN = 3;
 const META_ATTACHMENT_INDEX_COLUMN = 4;
 const DONE_COLUMN = 5;
 const VIEW_COLUMN = 6;
+const DIRECTION_COLUMN = 7;
+const PARTNER_COLUMN = 8;
 const TYPE_COLUMN = 9;
 const EMP_REIM_COLUMN = 10;
 const NOTES_COLUMN = 12;
 const GOOGLE_DRIVE_ID_COLUMN = 13;
+const ID_COLUMN = 14;
+const AMOUNT_COLUMN = 15;
+const CURRENCY_COLUMN = 16;
+const REF_DATE_COLUMN = 17;
+const DUE_DATE_COLUMN = 18;
 const FIRST_DATA_ROW = 2;
 
 type AttachmentMetadata = {
@@ -270,8 +277,15 @@ function writeRegistryRowsAtTop(
       );
 
       const aiResult = classifyDocumentAttachment(row.attachment);
+      row.values[DIRECTION_COLUMN - 1] = aiResult.direction;
+      row.values[PARTNER_COLUMN - 1] = aiResult.partner;
       row.values[TYPE_COLUMN - 1] = aiResult.type;
       row.values[NOTES_COLUMN - 1] = aiResult.notes;
+      row.values[ID_COLUMN - 1] = aiResult.id;
+      row.values[AMOUNT_COLUMN - 1] = aiResult.amount;
+      row.values[CURRENCY_COLUMN - 1] = aiResult.currency;
+      row.values[REF_DATE_COLUMN - 1] = aiResult.refDate;
+      row.values[DUE_DATE_COLUMN - 1] = aiResult.dueDate;
       row.values[META_COLUMN - 1] = addAiMetadataToMetaJson(
         row.values[META_COLUMN - 1],
         aiResult.ai,
