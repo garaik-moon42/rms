@@ -309,6 +309,32 @@ Az AI logikailag két részből áll, de technikailag egyetlen OpenAI hívásban
 
 Az egyetlen strukturált válasz `classification` és `extraction` objektumot tartalmaz. Ha a dokumentumtípus nem felismerhető, a `classification.type` üres, és az `extraction` mezői is üresek maradnak.
 
+### KNOWLEDGE munkalap
+
+Az AI prompt kiegészíthető a `KNOWLEDGE` nevű munkalap tartalmával. Ez arra szolgál, hogy az iktatás közben előkerülő üzleti szabályokat, partnerismereteket és pontosító utasításokat deploy nélkül lehessen hozzáadni.
+
+A munkalap elvárt oszlopai:
+
+| Oszlop | Tartalom |
+| --- | --- |
+| `topic` | Témakör megnevezése. |
+| `information` | Az AI-nak szóló információ vagy utasítás. |
+
+Működés:
+
+- a kód az első sort fejlécnek tekinti;
+- csak azok a sorok kerülnek a promptba, ahol az `information` nem üres;
+- a `KNOWLEDGE` lap hiánya vagy hibás fejléce nem akasztja meg az iktatást, csak kimarad a kiegészítő tudás;
+- egy futáson belül a tudásanyag cache-elve van, hogy több csatolmány feldolgozásakor ne olvassa újra feleslegesen a munkalapot;
+- a promptba kerülő tudásanyag mérete korlátozott, hogy ne nőjön kontrollálatlanul az OpenAI kérés.
+
+Példa bejegyzésformátum:
+
+```text
+topic: Számlák iránya
+information: Ha a MOON42 RDI Kft. a számlán vevőként szerepel, a direction értéke be ◄. Ha a MOON42 RDI Kft. a szállító, eladó vagy kibocsátó, a direction értéke ki ►.
+```
+
 ### AI mezőkitöltési scope
 
 Az AI jelenleg ezeket töltheti:
@@ -330,27 +356,6 @@ Ne töltse:
 - `travelAuthRef`
 
 A `done` akkor is maradjon `false`, ha az AI feldolgozás sikeres. Az AI által kitöltött adat emberi ellenőrzést igényel.
-
-### MOON42 nézőpont
-
-Az iktatórendszer a MOON42 RDI Kft. iktatórendszere. Az AI-nak az irányt és a partnert mindig a MOON42 szemszögéből kell meghatároznia.
-
-Irány szabályok:
-
-- ha a dokumentum a MOON42-höz érkezik, a `direction` értéke `be ◄`;
-- ha a dokumentumot a MOON42 bocsátotta ki vagy küldte, a `direction` értéke `ki ►`;
-- számlánál, ha a MOON42 a vevő, a dokumentum bejövő;
-- számlánál, ha a MOON42 a szállító/eladó/kibocsátó, a dokumentum kimenő;
-- ha az irány nem állapítható meg egyértelműen, a `direction` maradjon üres.
-
-Partner szabályok:
-
-- a `partner` mezőbe mindig a MOON42-vel viszonyban lévő másik fél vagy felek kerüljenek;
-- számlánál, ha a MOON42 a vevő, a partner a szállító/eladó;
-- számlánál, ha a MOON42 a szállító, a partner a vevő;
-- szerződésnél a partner a másik szerződő fél vagy felek neve;
-- HR dokumentumnál a partner mindig az a munkatárs vagy érintett személy, akire a dokumentum hivatkozik;
-- a `partner` mezőbe ne a MOON42 RDI Kft. kerüljön.
 
 ### Notes mező elvárt tartalma
 
@@ -398,7 +403,7 @@ Teljesítési igazolás
 
 Az AI válasza legyen strukturált, és mindig tartalmazzon megbízhatósági értéket (`confidence`). Ez nem csak tájékoztató adat: a manuális ellenőrzésnél fontos jelzés, hogy a modell mennyire biztos a besorolásban. Több dokumentumtípus határa ember számára sem mindig egyértelmű, ezért a válasz tartalmazhat alternatív kategóriákat is.
 
-Fontos kategóriaértelmezési szabály: ha egy dokumentum forma szerint szerződés, de HR tartalmú, akkor `HR` típusba tartozik. Például egy munkaszerződés típusa `HR`, nem `Szerződés`.
+A dokumentumtípusok közötti finom üzleti elhatárolásokat, például HR és szerződés határeseteket, a `KNOWLEDGE` munkalapon érdemes rögzíteni.
 
 Javasolt classification válasz:
 
@@ -458,8 +463,8 @@ A mezőkinyerés szigorú JSON schema alapján történik. Minden mező üres st
 
 A mezők jelentése:
 
-- `direction`: `be ◄`, `ki ►` vagy üres, mindig a MOON42 RDI Kft. szemszögéből;
-- `partner`: a MOON42-vel viszonyban lévő másik fél vagy felek neve;
+- `direction`: `be ◄`, `ki ►` vagy üres, a `KNOWLEDGE` munkalapon megadott üzleti szabályok szerint;
+- `partner`: a kapcsolódó partner neve vagy nevei, a `KNOWLEDGE` munkalapon megadott üzleti szabályok szerint;
 - `id`: dokumentumazonosító, például számlaszám, ajánlatszám, szerződésszám vagy rendelésazonosító;
 - `amount`: a fő összeg, lehetőleg bruttó vagy fizetendő végösszeg, devizanem nélkül;
 - `currency`: 3 karakteres ISO devizakód;

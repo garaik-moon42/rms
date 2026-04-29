@@ -4,7 +4,13 @@ const DEFAULT_OPENAI_MODEL = "gpt-5.4-mini";
 const OPENAI_RESPONSES_ENDPOINT = "https://api.openai.com/v1/responses";
 const INBOUND_DIRECTION_VALUE = "be ◄";
 const OUTBOUND_DIRECTION_VALUE = "ki ►";
-const REGISTRY_OWNER_NAME = "MOON42 RDI Kft.";
+const KNOWLEDGE_SHEET_NAME = "KNOWLEDGE";
+const KNOWLEDGE_TOPIC_HEADER = "topic";
+const KNOWLEDGE_INFORMATION_HEADER = "information";
+const KNOWLEDGE_MAX_PROMPT_CHARS = 12000;
+const KNOWLEDGE_MAX_ENTRY_CHARS = 2000;
+
+let cachedKnowledgeInstructions: string | null = null;
 
 const DOCUMENT_TYPES = [
   "Árajánlat",
@@ -281,9 +287,10 @@ function buildDocumentInputContent(
 }
 
 function buildDocumentAnalysisInstructions(): string {
+  const knowledgeInstructions = getKnowledgeInstructions();
+
   return [
     "Magyar iktatórendszer dokumentumelemző komponense vagy.",
-    `Az iktatórendszer tulajdonosa és nézőpontja: ${REGISTRY_OWNER_NAME}.`,
     "A feladatod a csatolt dokumentum üzleti vagy jogi típusának meghatározása, majd a registry mezők célzott kinyerése.",
     "Egyetlen strukturált JSON választ adj, classification és extraction objektummal.",
     "A classification.type mező csak a megadott típuslista egyik értéke vagy üres string lehet.",
@@ -291,15 +298,11 @@ function buildDocumentAnalysisInstructions(): string {
     "Ilyenkor a classification.notes röviden írja le, hogy nem sikerült felismerni a dokumentumot és miért, az extraction mezői pedig maradjanak üresek.",
     "Minden confidence 0 és 1 közötti szám legyen, és tükrözze a tényleges bizonyosságot.",
     "A classification.notes embernek hasznos, kereshető összefoglaló legyen, ne technikai log.",
-    "Ha egy dokumentum forma szerint szerződés, de HR tartalmú, akkor HR típusba tartozik. Például egy munkaszerződés típusa HR.",
     "Csak olyan mezőt tölts ki, amelyet a dokumentum tényleges tartalma alátámaszt.",
     "Ha egy extraction mező nem egyértelmű vagy nem található, üres stringet adj vissza.",
     "Ne töltsd az empReim és travelAuthRef mezőket; ezek nincsenek ebben a sémában.",
-    `extraction.direction: a dokumentum irányát mindig ${REGISTRY_OWNER_NAME} szemszögéből állapítsd meg. Csak "${INBOUND_DIRECTION_VALUE}", "${OUTBOUND_DIRECTION_VALUE}" vagy üres string lehet. "${INBOUND_DIRECTION_VALUE}" jelentése bejövő dokumentum ${REGISTRY_OWNER_NAME} számára, "${OUTBOUND_DIRECTION_VALUE}" jelentése ${REGISTRY_OWNER_NAME} által kibocsátott vagy küldött dokumentum.`,
-    `Számláknál ha ${REGISTRY_OWNER_NAME} a vevő, akkor direction="${INBOUND_DIRECTION_VALUE}". Ha ${REGISTRY_OWNER_NAME} a szállító/eladó/kibocsátó, akkor direction="${OUTBOUND_DIRECTION_VALUE}".`,
-    `Szerződésnél, ajánlatnál, megrendelőnél és leveleknél is ${REGISTRY_OWNER_NAME} nézőpontját használd: ami ${REGISTRY_OWNER_NAME}-hez érkezik, "${INBOUND_DIRECTION_VALUE}", amit ${REGISTRY_OWNER_NAME} ad ki vagy küld, "${OUTBOUND_DIRECTION_VALUE}". Ha ez nem egyértelmű, üres stringet adj.`,
-    `extraction.partner: mindig a ${REGISTRY_OWNER_NAME}-vel viszonyban lévő másik felet vagy feleket írd ide, soha ne magát a ${REGISTRY_OWNER_NAME}-t. Számlánál ez a másik számlaszereplő: ha ${REGISTRY_OWNER_NAME} a vevő, akkor a szállító/eladó; ha ${REGISTRY_OWNER_NAME} a szállító, akkor a vevő.`,
-    `Szerződés esetén extraction.partner a másik szerződő fél vagy felek neve. HR dokumentum esetén extraction.partner mindig az a munkatárs vagy érintett személy, akire a dokumentum hivatkozik.`,
+    `extraction.direction: csak "${INBOUND_DIRECTION_VALUE}", "${OUTBOUND_DIRECTION_VALUE}" vagy üres string lehet. Az irány meghatározásához használd a KNOWLEDGE munkalapról érkező üzleti szabályokat, ha vannak.`,
+    "extraction.partner: a kapcsolódó partner neve vagy nevei. A pontos partnerkiválasztási szabályokhoz használd a KNOWLEDGE munkalapról érkező üzleti szabályokat, ha vannak.",
     "extraction.id: a dokumentum saját azonosítója, például számlaszám, ajánlatszám, szerződésszám, rendelésazonosító vagy ügyazonosító.",
     "extraction.amount: a dokumentum fő összege, lehetőleg bruttó vagy fizetendő végösszeg. Csak számként vagy számformátumú szövegként add meg, devizanem nélkül.",
     "extraction.currency: hárombetűs ISO devizakód, például HUF, EUR vagy USD.",
@@ -307,6 +310,90 @@ function buildDocumentAnalysisInstructions(): string {
     "extraction.dueDate: fizetési határidő, lejárat vagy teljesítési határidő YYYY-MM-DD formátumban.",
     "extraction.confidence: a mezőkinyerés egészére vonatkozó megbízhatóság.",
     `Típuslista: ${DOCUMENT_TYPES.join(", ")}.`,
+    ...(knowledgeInstructions === "" ? [] : [knowledgeInstructions]),
+  ].join("\n");
+}
+
+function getKnowledgeInstructions(): string {
+  if (cachedKnowledgeInstructions !== null) {
+    return cachedKnowledgeInstructions;
+  }
+
+  try {
+    cachedKnowledgeInstructions = readKnowledgeInstructions();
+  } catch (error) {
+    console.warn("Could not read AI knowledge sheet", { error });
+    cachedKnowledgeInstructions = "";
+  }
+
+  return cachedKnowledgeInstructions;
+}
+
+function readKnowledgeInstructions(): string {
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = spreadsheet.getSheetByName(KNOWLEDGE_SHEET_NAME);
+
+  if (sheet === null || sheet.getLastRow() < 2) {
+    return "";
+  }
+
+  const lastColumn = Math.max(sheet.getLastColumn(), 2);
+  const headers = sheet
+    .getRange(1, 1, 1, lastColumn)
+    .getValues()[0]
+    .map((header) => String(header).trim().toLowerCase());
+  const topicColumnIndex = headers.indexOf(KNOWLEDGE_TOPIC_HEADER);
+  const informationColumnIndex = headers.indexOf(KNOWLEDGE_INFORMATION_HEADER);
+
+  if (topicColumnIndex === -1 || informationColumnIndex === -1) {
+    console.warn("AI knowledge sheet is missing expected headers", {
+      expectedHeaders: [KNOWLEDGE_TOPIC_HEADER, KNOWLEDGE_INFORMATION_HEADER],
+    });
+
+    return "";
+  }
+
+  const rows = sheet
+    .getRange(2, 1, sheet.getLastRow() - 1, lastColumn)
+    .getValues();
+  const entries: string[] = [];
+  let totalLength = 0;
+
+  for (const row of rows) {
+    const topic = String(row[topicColumnIndex] ?? "").trim();
+    const information = truncateText(
+      String(row[informationColumnIndex] ?? "").trim(),
+      KNOWLEDGE_MAX_ENTRY_CHARS,
+    );
+
+    if (information === "") {
+      continue;
+    }
+
+    const entry = [
+      `Témakör: ${topic === "" ? "általános" : topic}`,
+      `Információ: ${information}`,
+    ].join("\n");
+
+    if (totalLength + entry.length > KNOWLEDGE_MAX_PROMPT_CHARS) {
+      console.warn("AI knowledge prompt limit reached", {
+        maxChars: KNOWLEDGE_MAX_PROMPT_CHARS,
+      });
+      break;
+    }
+
+    entries.push(entry);
+    totalLength += entry.length;
+  }
+
+  if (entries.length === 0) {
+    return "";
+  }
+
+  return [
+    "További tudás és üzleti szabályok a KNOWLEDGE munkalapról.",
+    "Ezeket az információkat a fenti alapszabályokkal együtt használd. Ha ellentmondást látsz, a specifikusabb KNOWLEDGE bejegyzés erősebb iránymutatás, de a JSON schema korlátait mindig tartsd be.",
+    entries.join("\n\n"),
   ].join("\n");
 }
 
