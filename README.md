@@ -331,6 +331,27 @@ Ne töltse:
 
 A `done` akkor is maradjon `false`, ha az AI feldolgozás sikeres. Az AI által kitöltött adat emberi ellenőrzést igényel.
 
+### MOON42 nézőpont
+
+Az iktatórendszer a MOON42 RDI Kft. iktatórendszere. Az AI-nak az irányt és a partnert mindig a MOON42 szemszögéből kell meghatároznia.
+
+Irány szabályok:
+
+- ha a dokumentum a MOON42-höz érkezik, a `direction` értéke `be ◄`;
+- ha a dokumentumot a MOON42 bocsátotta ki vagy küldte, a `direction` értéke `ki ►`;
+- számlánál, ha a MOON42 a vevő, a dokumentum bejövő;
+- számlánál, ha a MOON42 a szállító/eladó/kibocsátó, a dokumentum kimenő;
+- ha az irány nem állapítható meg egyértelműen, a `direction` maradjon üres.
+
+Partner szabályok:
+
+- a `partner` mezőbe mindig a MOON42-vel viszonyban lévő másik fél vagy felek kerüljenek;
+- számlánál, ha a MOON42 a vevő, a partner a szállító/eladó;
+- számlánál, ha a MOON42 a szállító, a partner a vevő;
+- szerződésnél a partner a másik szerződő fél vagy felek neve;
+- HR dokumentumnál a partner mindig az a munkatárs vagy érintett személy, akire a dokumentum hivatkozik;
+- a `partner` mezőbe ne a MOON42 RDI Kft. kerüljön.
+
 ### Notes mező elvárt tartalma
 
 A `notes` mező ne technikai log legyen, hanem kereshető, embernek hasznos dokumentumleírás. Célja, hogy a felhasználó később a registryben keresve megtalálja a dokumentumot.
@@ -437,8 +458,8 @@ A mezőkinyerés szigorú JSON schema alapján történik. Minden mező üres st
 
 A mezők jelentése:
 
-- `direction`: `be ◄`, `ki ►` vagy üres, ha nem egyértelmű;
-- `partner`: a legfontosabb kapcsolódó fél neve;
+- `direction`: `be ◄`, `ki ►` vagy üres, mindig a MOON42 RDI Kft. szemszögéből;
+- `partner`: a MOON42-vel viszonyban lévő másik fél vagy felek neve;
 - `id`: dokumentumazonosító, például számlaszám, ajánlatszám, szerződésszám vagy rendelésazonosító;
 - `amount`: a fő összeg, lehetőleg bruttó vagy fizetendő végösszeg, devizanem nélkül;
 - `currency`: 3 karakteres ISO devizakód;

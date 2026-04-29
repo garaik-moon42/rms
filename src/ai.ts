@@ -4,6 +4,7 @@ const DEFAULT_OPENAI_MODEL = "gpt-5.4-mini";
 const OPENAI_RESPONSES_ENDPOINT = "https://api.openai.com/v1/responses";
 const INBOUND_DIRECTION_VALUE = "be ◄";
 const OUTBOUND_DIRECTION_VALUE = "ki ►";
+const REGISTRY_OWNER_NAME = "MOON42 RDI Kft.";
 
 const DOCUMENT_TYPES = [
   "Árajánlat",
@@ -282,6 +283,7 @@ function buildDocumentInputContent(
 function buildDocumentAnalysisInstructions(): string {
   return [
     "Magyar iktatórendszer dokumentumelemző komponense vagy.",
+    `Az iktatórendszer tulajdonosa és nézőpontja: ${REGISTRY_OWNER_NAME}.`,
     "A feladatod a csatolt dokumentum üzleti vagy jogi típusának meghatározása, majd a registry mezők célzott kinyerése.",
     "Egyetlen strukturált JSON választ adj, classification és extraction objektummal.",
     "A classification.type mező csak a megadott típuslista egyik értéke vagy üres string lehet.",
@@ -293,8 +295,11 @@ function buildDocumentAnalysisInstructions(): string {
     "Csak olyan mezőt tölts ki, amelyet a dokumentum tényleges tartalma alátámaszt.",
     "Ha egy extraction mező nem egyértelmű vagy nem található, üres stringet adj vissza.",
     "Ne töltsd az empReim és travelAuthRef mezőket; ezek nincsenek ebben a sémában.",
-    `extraction.direction: csak "${INBOUND_DIRECTION_VALUE}", "${OUTBOUND_DIRECTION_VALUE}" vagy üres string lehet. "${INBOUND_DIRECTION_VALUE}" jelentése bejövő, "${OUTBOUND_DIRECTION_VALUE}" jelentése kimenő. Csak akkor töltsd, ha a dokumentumból egyértelmű. Egy beérkező szállítói számla tipikusan "${INBOUND_DIRECTION_VALUE}", egy saját kibocsátású ajánlat vagy számla tipikusan "${OUTBOUND_DIRECTION_VALUE}".`,
-    "extraction.partner: a legfontosabb kapcsolódó fél neve. Számlánál tipikusan a partner, szerződésnél a másik fél, HR dokumentumnál a munkavállaló vagy érintett személy.",
+    `extraction.direction: a dokumentum irányát mindig ${REGISTRY_OWNER_NAME} szemszögéből állapítsd meg. Csak "${INBOUND_DIRECTION_VALUE}", "${OUTBOUND_DIRECTION_VALUE}" vagy üres string lehet. "${INBOUND_DIRECTION_VALUE}" jelentése bejövő dokumentum ${REGISTRY_OWNER_NAME} számára, "${OUTBOUND_DIRECTION_VALUE}" jelentése ${REGISTRY_OWNER_NAME} által kibocsátott vagy küldött dokumentum.`,
+    `Számláknál ha ${REGISTRY_OWNER_NAME} a vevő, akkor direction="${INBOUND_DIRECTION_VALUE}". Ha ${REGISTRY_OWNER_NAME} a szállító/eladó/kibocsátó, akkor direction="${OUTBOUND_DIRECTION_VALUE}".`,
+    `Szerződésnél, ajánlatnál, megrendelőnél és leveleknél is ${REGISTRY_OWNER_NAME} nézőpontját használd: ami ${REGISTRY_OWNER_NAME}-hez érkezik, "${INBOUND_DIRECTION_VALUE}", amit ${REGISTRY_OWNER_NAME} ad ki vagy küld, "${OUTBOUND_DIRECTION_VALUE}". Ha ez nem egyértelmű, üres stringet adj.`,
+    `extraction.partner: mindig a ${REGISTRY_OWNER_NAME}-vel viszonyban lévő másik felet vagy feleket írd ide, soha ne magát a ${REGISTRY_OWNER_NAME}-t. Számlánál ez a másik számlaszereplő: ha ${REGISTRY_OWNER_NAME} a vevő, akkor a szállító/eladó; ha ${REGISTRY_OWNER_NAME} a szállító, akkor a vevő.`,
+    `Szerződés esetén extraction.partner a másik szerződő fél vagy felek neve. HR dokumentum esetén extraction.partner mindig az a munkatárs vagy érintett személy, akire a dokumentum hivatkozik.`,
     "extraction.id: a dokumentum saját azonosítója, például számlaszám, ajánlatszám, szerződésszám, rendelésazonosító vagy ügyazonosító.",
     "extraction.amount: a dokumentum fő összege, lehetőleg bruttó vagy fizetendő végösszeg. Csak számként vagy számformátumú szövegként add meg, devizanem nélkül.",
     "extraction.currency: hárombetűs ISO devizakód, például HUF, EUR vagy USD.",
