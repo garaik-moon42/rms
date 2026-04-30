@@ -67,8 +67,10 @@ function onOpen(): void {
   SpreadsheetApp.getUi()
     .createMenu("Iktatás")
     .addItem("Olvasatlan levelek feldolgozása", "processUnreadInboxAttachments")
-    .addItem("Drive célmappa beállítása", "setTargetDriveFolderId")
-    .addItem("OpenAI API kulcs beállítása", "setOpenAiApiKey")
+    .addSubMenu(SpreadsheetApp.getUi().createMenu("Admin")   
+      .addItem("Drive célmappa beállítása", "setTargetDriveFolderId")
+      .addItem("OpenAI API kulcs beállítása", "setOpenAiApiKey")
+    )
     .addToUi();
 }
 
