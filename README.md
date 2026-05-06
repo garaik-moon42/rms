@@ -129,13 +129,70 @@ A Sheet megnyitásakor az `onOpen()` függvény létrehoz egy egyedi menüt:
 
 ```text
 Iktatás > Olvasatlan levelek feldolgozása
-Iktatás > Drive célmappa beállítása
-Iktatás > OpenAI API kulcs beállítása
+Iktatás > Számlák letöltése a könyvelésnek
+Iktatás > Admin > Drive célmappa beállítása
+Iktatás > Admin > OpenAI API kulcs beállítása
 ```
 
-Az első menüpont kézzel indítja a feldolgozást a Google Sheets felületéről. A második menüpont bekéri egy már meglévő Google Drive célmappa ID-ját vagy URL-jét, ellenőrzi, hogy a mappa elérhető-e, majd elmenti a `TARGET_DRIVE_FOLDER_ID` Script Property értékbe. A harmadik menüpont bekéri és Script Property-be menti az OpenAI API kulcsot.
+Az első menüpont kézzel indítja a feldolgozást a Google Sheets felületéről. A második menüpont megnyitja a könyvelési export sidebart. Az Admin almenüben a Drive célmappa beállítása bekér egy már meglévő Google Drive célmappa ID-t vagy URL-t, ellenőrzi, hogy a mappa elérhető-e, majd elmenti a `TARGET_DRIVE_FOLDER_ID` Script Property értékbe. Az OpenAI API kulcs beállítása bekéri és Script Property-be menti az OpenAI API kulcsot.
 
 Később időzített trigger is hozzáadható, de jelenleg nincs automatikus trigger definiálva a repositoryban.
+
+## Könyvelési export
+
+A könyvelési export célja, hogy egy kiválasztott hónap könyveléshez szükséges dokumentumait egy üres Google Drive célmappába másolja.
+
+A sidebar menüpontja:
+
+```text
+Iktatás > Számlák letöltése a könyvelésnek
+```
+
+A sidebar mezői:
+
+- hónapválasztó `YYYY-MM` formátumban;
+- cél Google Drive mappa ID vagy URL;
+- `Ellenőrzés` gomb;
+- `Másolás` gomb jóváhagyással.
+
+A default hónap az aktuális dátumot megelőző teljes hónap. Például 2026.05.06-án a default érték `2026-04`.
+
+Az export a `REGISTRY` munkalap sorait szűri. A hónapba tartozás alapja a `refDate` oszlop, `YYYY-MM-DD` formátumban. A másolható sorhoz szükséges mezők:
+
+- `seq`;
+- `partner`;
+- `type`;
+- `googleDriveId`;
+- `refDate`.
+
+Az exportált dokumentumtípusok:
+
+```text
+Átutalásos számla
+Díjbekérő
+Kártyás számla
+Készpénzes számla
+Proforma számla
+Útelszámolás
+Sztornó számla
+Érvénytelenítő számla
+Számlával egy tekintet alá eső okirat
+Teljesítési igazolás
+```
+
+Az `Ellenőrzés` nem másol fájlt. Megnézi, hogy a célmappa elérhető-e, üres-e, hány dokumentum felel meg a szűrésnek, és hány sor marad ki hiányzó vagy hibás kötelező mező miatt. A `Másolás` csak sikeres ellenőrzés és üres célmappa esetén használható. A másolás előtt a backend újraellenőrzi a célmappa állapotát, hogy elavult sidebar állapotból ne lehessen nem üres mappába másolni.
+
+A másolás progress bart jelenít meg, amely mutatja a feldolgozott, sikeresen másolt és hibás fájlok számát. A progress állapot átmenetileg a felhasználói Apps Script cache-be kerül.
+
+A célfájl neve ilyen szerkezetű:
+
+```text
+partner_seq_type_YYYYMM_originalFileName
+```
+
+Az `originalFileName` elsődleges forrása a `meta` JSON `attachmentFileName` mezője. Ha ez hiányzik vagy nem olvasható, a rendszer a Drive-on lévő aktuális fájlnév iktatószám-prefix nélküli maradékát használja fallbackként. A fájlnév részei normalizálva vannak: az ékezetek eltávolításra kerülnek, a szóközök és veszélyes karakterek `_` karakterre cserélődnek, az ismételt `_` karakterek összevonódnak.
+
+Fontos böngészős megjegyzés: Google Apps Script sidebaroknál több egyszerre bejelentkezett Google fiók okozhat `Authorization is required` hibát a `google.script.run` hívásoknál. Ilyenkor érdemes olyan böngészőprofilban vagy inkognitó ablakban futtatni a Sheetet, ahol csak a használt Google fiók aktív.
 
 ## Jogosultságok
 
@@ -145,6 +202,7 @@ Az Apps Script manifest jelenlegi scope-jai:
 [
   "https://mail.google.com/",
   "https://www.googleapis.com/auth/drive",
+  "https://www.googleapis.com/auth/script.container.ui",
   "https://www.googleapis.com/auth/script.external_request",
   "https://www.googleapis.com/auth/spreadsheets.currentonly"
 ]
@@ -153,7 +211,8 @@ Az Apps Script manifest jelenlegi scope-jai:
 Ezek a jelenlegi működéshez szükségesek:
 
 - Gmail olvasás, label kezelés, olvasottra állítás és archiválás;
-- Google Drive célmappa ellenőrzése és csatolmányok feltöltése;
+- Google Drive célmappa ellenőrzése, csatolmányok feltöltése és könyvelési export másolatok készítése;
+- Google Sheets container UI sidebar megnyitása;
 - OpenAI API hívás `UrlFetchApp` használatával;
 - az aktuális Google Sheet írása.
 
@@ -170,6 +229,8 @@ Ezek a jelenlegi működéshez szükségesek:
 ├── scripts/
 │   └── copy-manifest.mjs
 ├── src/
+│   ├── accounting-export-sidebar.html
+│   ├── accounting-export.ts
 │   ├── ai.ts
 │   └── code.ts
 └── tsconfig.json
@@ -179,8 +240,10 @@ Fontos fájlok:
 
 - `src/code.ts`: az Apps Script iktatási workflow TypeScript forráskódja;
 - `src/ai.ts`: az OpenAI alapú dokumentumtípus-felismerés TypeScript forráskódja;
+- `src/accounting-export.ts`: havi könyvelési export backend logika;
+- `src/accounting-export-sidebar.html`: a könyvelési export sidebar felülete;
 - `appsscript.json`: Apps Script manifest, scope-okkal és runtime beállításokkal;
-- `scripts/copy-manifest.mjs`: build után bemásolja a manifestet a `build/` mappába;
+- `scripts/copy-manifest.mjs`: build után bemásolja a manifestet és a sidebar HTML fájlokat a `build/` mappába;
 - `.clasp.json.example`: minta `clasp` konfiguráció;
 - `.clasp.json`: helyi, nem verziózott `clasp` konfiguráció a konkrét `scriptId` értékkel.
 
@@ -192,7 +255,7 @@ A build folyamata:
 
 1. `tsc` lefordítja a `src/*.ts` fájlokat.
 2. A kimenet a `build/` mappába kerül.
-3. A `scripts/copy-manifest.mjs` bemásolja az `appsscript.json` fájlt a `build/` mappába.
+3. A `scripts/copy-manifest.mjs` bemásolja az `appsscript.json` fájlt és a `src/*.html` sidebar fájlokat a `build/` mappába.
 4. A `clasp push` a `build/` mappa tartalmát tölti fel Apps Scriptbe.
 
 Elérhető npm parancsok:
