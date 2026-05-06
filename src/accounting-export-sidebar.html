@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: Arial, sans-serif;
+      }
+
+      body {
+        margin: 0;
+        padding: 16px;
+        color: #202124;
+        background: #ffffff;
+        font-size: 13px;
+      }
+
+      h1 {
+        margin: 0 0 16px;
+        font-size: 18px;
+        font-weight: 600;
+      }
+
+      label {
+        display: block;
+        margin: 14px 0 6px;
+        color: #3c4043;
+        font-weight: 600;
+      }
+
+      input {
+        box-sizing: border-box;
+        width: 100%;
+        min-height: 36px;
+        padding: 7px 9px;
+        border: 1px solid #dadce0;
+        border-radius: 4px;
+        color: #202124;
+        font: inherit;
+      }
+
+      input:focus {
+        border-color: #1a73e8;
+        outline: none;
+        box-shadow: 0 0 0 1px #1a73e8;
+      }
+
+      button {
+        min-height: 36px;
+        padding: 8px 12px;
+        border: 1px solid #1a73e8;
+        border-radius: 4px;
+        background: #1a73e8;
+        color: #ffffff;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      button.secondary {
+        background: #ffffff;
+        color: #1a73e8;
+      }
+
+      button:disabled {
+        border-color: #dadce0;
+        background: #f1f3f4;
+        color: #9aa0a6;
+        cursor: default;
+      }
+
+      .actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 16px;
+      }
+
+      .actions button {
+        flex: 1 1 0;
+      }
+
+      .status {
+        margin-top: 16px;
+        padding: 12px;
+        border: 1px solid #dadce0;
+        border-radius: 6px;
+        background: #f8fafd;
+        line-height: 1.45;
+      }
+
+      .status.error {
+        border-color: #f4b4ae;
+        background: #fce8e6;
+      }
+
+      .status.success {
+        border-color: #b7dfc6;
+        background: #e6f4ea;
+      }
+
+      .muted {
+        color: #5f6368;
+      }
+
+      .progress {
+        display: none;
+        margin-top: 16px;
+      }
+
+      .progress.visible {
+        display: block;
+      }
+
+      .progress-track {
+        height: 10px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: #e8eaed;
+      }
+
+      .progress-bar {
+        width: 0%;
+        height: 100%;
+        border-radius: inherit;
+        background: #1a73e8;
+        transition: width 180ms ease;
+      }
+
+      .progress-text {
+        margin-top: 6px;
+        color: #5f6368;
+        font-size: 12px;
+        line-height: 1.4;
+      }
+
+      ul {
+        margin: 8px 0 0;
+        padding-left: 18px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Számlák letöltése</h1>
+
+    <label for="month">Hónap</label>
+    <input id="month" type="month">
+
+    <label for="folder">Cél Google Drive mappa ID vagy URL</label>
+    <input id="folder" type="text" autocomplete="off">
+
+    <div class="actions">
+      <button class="secondary" id="previewButton" type="button">Ellenőrzés</button>
+      <button id="copyButton" type="button" disabled>Másolás</button>
+    </div>
+
+    <div class="status muted" id="status">Add meg a célmappát, majd indítsd az ellenőrzést.</div>
+    <div class="progress" id="progress">
+      <div class="progress-track">
+        <div class="progress-bar" id="progressBar"></div>
+      </div>
+      <div class="progress-text" id="progressText">0 / 0 fájl másolva</div>
+    </div>
+
+    <script>
+      const monthInput = document.getElementById("month");
+      const folderInput = document.getElementById("folder");
+      const previewButton = document.getElementById("previewButton");
+      const copyButton = document.getElementById("copyButton");
+      const statusBox = document.getElementById("status");
+      const progressBox = document.getElementById("progress");
+      const progressBar = document.getElementById("progressBar");
+      const progressText = document.getElementById("progressText");
+      let lastPreview = null;
+      let progressTimer = null;
+
+      function setBusy(isBusy) {
+        previewButton.disabled = isBusy;
+        copyButton.disabled = isBusy || !lastPreview || !lastPreview.ok;
+      }
+
+      function setStatus(html, type) {
+        statusBox.className = `status ${type || ""}`.trim();
+        statusBox.innerHTML = html;
+      }
+
+      function escapeHtml(value) {
+        return String(value)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;");
+      }
+
+      function renderPreview(preview) {
+        const errors = preview.errors || [];
+        const skippedRows = preview.skippedRows || [];
+        const details = [
+          `Hónap: ${escapeHtml(preview.monthLabel || preview.month)}`,
+          `Célmappa: ${escapeHtml(preview.targetFolderName || preview.targetFolderId || "-")}`,
+          `Talált dokumentumok: ${preview.documentCount}`,
+          `Kihagyott sorok: ${preview.skippedCount}`,
+          `Célmappa üres: ${preview.targetFolderIsEmpty ? "igen" : "nem"}`,
+        ];
+        const skippedHtml = skippedRows.length === 0
+          ? ""
+          : `<p>Kihagyott sorok:</p><ul>${skippedRows.slice(0, 10).map((row) => (
+            `<li>${row.rowNumber}: ${escapeHtml(row.reason)}</li>`
+          )).join("")}</ul>`;
+        const errorHtml = errors.length === 0
+          ? ""
+          : `<p>Hibák:</p><ul>${errors.map((error) => (
+            `<li>${escapeHtml(error)}</li>`
+          )).join("")}</ul>`;
+
+        setStatus(
+          `<p>${details.join("<br>")}</p>${errorHtml}${skippedHtml}`,
+          preview.ok ? "success" : "error",
+        );
+      }
+
+      function renderCopyResult(result) {
+        stopProgressPolling();
+        updateProgress({
+          totalCount: result.documentCount,
+          processedCount: result.copiedCount + (result.copyErrors || []).length,
+          copiedCount: result.copiedCount,
+          errorCount: (result.copyErrors || []).length,
+          message: "Másolás kész.",
+        });
+
+        const copyErrors = result.copyErrors || [];
+        const errorHtml = copyErrors.length === 0
+          ? ""
+          : `<p>Másolási hibák:</p><ul>${copyErrors.slice(0, 10).map((error) => (
+            `<li>${error.rowNumber} / ${escapeHtml(error.registryNumber)}: ${escapeHtml(error.message)}</li>`
+          )).join("")}</ul>`;
+
+        setStatus(
+          `<p>Másolás kész.<br>Másolt fájlok: ${result.copiedCount}<br>Másolási hibák: ${copyErrors.length}<br>Kihagyott sorok: ${result.skippedCount}</p>${errorHtml}`,
+          copyErrors.length === 0 ? "success" : "error",
+        );
+      }
+
+      function getInputs() {
+        return {
+          month: monthInput.value,
+          folder: folderInput.value,
+        };
+      }
+
+      function createProgressId() {
+        return `${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
+      }
+
+      function resetProgress(totalCount) {
+        progressBox.classList.add("visible");
+        updateProgress({
+          totalCount,
+          processedCount: 0,
+          copiedCount: 0,
+          errorCount: 0,
+          message: "Másolás előkészítése...",
+        });
+      }
+
+      function updateProgress(progress) {
+        const totalCount = Number(progress.totalCount || 0);
+        const processedCount = Number(progress.processedCount || 0);
+        const copiedCount = Number(progress.copiedCount || 0);
+        const errorCount = Number(progress.errorCount || 0);
+        const percentage = totalCount <= 0
+          ? 0
+          : Math.min(100, Math.round((processedCount / totalCount) * 100));
+        const message = progress.message ? `<br>${escapeHtml(progress.message)}` : "";
+
+        progressBar.style.width = `${percentage}%`;
+        progressText.innerHTML = `${processedCount} / ${totalCount} fájl feldolgozva, ${copiedCount} másolva, ${errorCount} hiba${message}`;
+      }
+
+      function startProgressPolling(progressId) {
+        stopProgressPolling();
+        progressTimer = window.setInterval(() => {
+          google.script.run
+            .withSuccessHandler((progress) => {
+              updateProgress(progress);
+
+              if (progress.status === "finished" || progress.status === "blocked") {
+                stopProgressPolling();
+              }
+            })
+            .withFailureHandler(() => {})
+            .getAccountingExportProgress(progressId);
+        }, 1500);
+      }
+
+      function stopProgressPolling() {
+        if (progressTimer !== null) {
+          window.clearInterval(progressTimer);
+          progressTimer = null;
+        }
+      }
+
+      function handleFailure(error) {
+        stopProgressPolling();
+        lastPreview = null;
+        setBusy(false);
+        const message = error && error.message ? error.message : String(error);
+        const accountHint = message.includes("Authorization is required")
+          ? "<p>Engedélyezés szükséges. Ha több Google fiókkal vagy bejelentkezve, próbáld meg egy olyan böngészőprofilban vagy inkognitó ablakban, ahol csak a használt fiók aktív.</p>"
+          : "";
+
+        setStatus(`${accountHint}<p>${escapeHtml(message)}</p>`, "error");
+      }
+
+      function getPreviousMonthValue() {
+        const now = new Date();
+        const previousMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        const year = previousMonth.getFullYear();
+        const month = String(previousMonth.getMonth() + 1).padStart(2, "0");
+
+        return `${year}-${month}`;
+      }
+
+      previewButton.addEventListener("click", () => {
+        const inputs = getInputs();
+
+        lastPreview = null;
+        setBusy(true);
+        setStatus("Ellenőrzés folyamatban...", "");
+        google.script.run
+          .withSuccessHandler((preview) => {
+            lastPreview = preview;
+            setBusy(false);
+            renderPreview(preview);
+          })
+          .withFailureHandler(handleFailure)
+          .previewAccountingExport(inputs.month, inputs.folder);
+      });
+
+      copyButton.addEventListener("click", () => {
+        const inputs = getInputs();
+
+        if (!lastPreview || !lastPreview.ok) {
+          return;
+        }
+
+        if (!confirm(`${lastPreview.documentCount} dokumentum másolása indul. Folytatod?`)) {
+          return;
+        }
+
+        const progressId = createProgressId();
+
+        setBusy(true);
+        setStatus("Másolás folyamatban...", "");
+        resetProgress(lastPreview.documentCount);
+        startProgressPolling(progressId);
+        google.script.run
+          .withSuccessHandler((result) => {
+            lastPreview = null;
+            setBusy(false);
+            copyButton.disabled = true;
+            renderCopyResult(result);
+          })
+          .withFailureHandler(handleFailure)
+          .copyAccountingExport(inputs.month, inputs.folder, progressId);
+      });
+
+      monthInput.addEventListener("change", () => {
+        lastPreview = null;
+        copyButton.disabled = true;
+      });
+
+      folderInput.addEventListener("input", () => {
+        lastPreview = null;
+        copyButton.disabled = true;
+      });
+
+      monthInput.value = getPreviousMonthValue();
+    </script>
+  </body>
+</html>
