@@ -248,16 +248,15 @@ function writeRegistryRowsAtTop(
 
   const nextRegistryNumber = getNextRegistryNumber(registrySheet);
   const sortedRows = rows
-    .sort((a, b) => a.timestamp - b.timestamp)
+    .sort((a, b) => b.timestamp - a.timestamp)
     .map((row, index) => ({
       attachment: row.attachment,
       values: [
-        formatRegistryNumber(nextRegistryNumber + index),
+        formatRegistryNumber(nextRegistryNumber + rows.length - index - 1),
         ...row.values,
       ],
       timestamp: row.timestamp,
-    }))
-    .sort((a, b) => b.timestamp - a.timestamp);
+    }));
   const targetFolder = getTargetDriveFolder();
   const uploadedFileIds: string[] = [];
   let rowsInserted = false;
