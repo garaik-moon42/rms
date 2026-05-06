@@ -10,6 +10,8 @@ Important source files:
 - `src/ai.ts`: OpenAI document analysis and field extraction.
 - `src/accounting-export.ts`: backend for the monthly accounting export.
 - `src/accounting-export-sidebar.html`: Google Sheets sidebar UI for the accounting export.
+- `src/registry-extract.ts`: backend for extracting selected registry rows into a Drive package.
+- `src/registry-extract-sidebar.html`: Google Sheets sidebar UI for registry extracts.
 - `appsscript.json`: Apps Script manifest and OAuth scopes.
 - `scripts/copy-manifest.mjs`: copies manifest and HTML sidebar files into `build/`.
 
@@ -55,6 +57,18 @@ Do not edit generated files in `build/` directly. Edit `src/`, `appsscript.json`
 - Target file names use `partner_seq_type_YYYYMM_originalFileName`.
 - File-name parts must be normalized for Drive safety: remove accents, replace spaces and unsafe characters with `_`, collapse repeated `_`, and trim separators.
 - Copy progress is stored in user cache via `CacheService`; keep progress data small and temporary.
+
+## Registry Extract Rules
+
+- The registry extract is opened from `Iktatás > Iktatói kivonat készítése`.
+- It works from the user's current selection on the `REGISTRY` sheet.
+- Convert selected cells/ranges into unique data row numbers; ignore the header row.
+- The target folder does not need to be empty; warn but do not block when it already has content.
+- Copied file names use `partner_seq_type_originalFileName`.
+- Create one Google Sheets file in the target folder with a single `DOCUMENTS` sheet.
+- Omit technical columns from `DOCUMENTS`: `meta`, `metaMessageId`, `metaAttachmentIndex`, and `googleDriveId`.
+- Keep the `view` column, but point it at the copied Drive files, not the original registry files.
+- New Spreadsheet creation requires the full `https://www.googleapis.com/auth/spreadsheets` scope.
 
 ## OpenAI And Security
 

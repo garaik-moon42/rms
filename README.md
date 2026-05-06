@@ -130,11 +130,12 @@ A Sheet megnyitásakor az `onOpen()` függvény létrehoz egy egyedi menüt:
 ```text
 Iktatás > Olvasatlan levelek feldolgozása
 Iktatás > Számlák letöltése a könyvelésnek
+Iktatás > Iktatói kivonat készítése
 Iktatás > Admin > Drive célmappa beállítása
 Iktatás > Admin > OpenAI API kulcs beállítása
 ```
 
-Az első menüpont kézzel indítja a feldolgozást a Google Sheets felületéről. A második menüpont megnyitja a könyvelési export sidebart. Az Admin almenüben a Drive célmappa beállítása bekér egy már meglévő Google Drive célmappa ID-t vagy URL-t, ellenőrzi, hogy a mappa elérhető-e, majd elmenti a `TARGET_DRIVE_FOLDER_ID` Script Property értékbe. Az OpenAI API kulcs beállítása bekéri és Script Property-be menti az OpenAI API kulcsot.
+Az első menüpont kézzel indítja a feldolgozást a Google Sheets felületéről. A második menüpont megnyitja a könyvelési export sidebart. A harmadik menüpont az iktatói kivonat készítő sidebart nyitja meg. Az Admin almenüben a Drive célmappa beállítása bekér egy már meglévő Google Drive célmappa ID-t vagy URL-t, ellenőrzi, hogy a mappa elérhető-e, majd elmenti a `TARGET_DRIVE_FOLDER_ID` Script Property értékbe. Az OpenAI API kulcs beállítása bekéri és Script Property-be menti az OpenAI API kulcsot.
 
 Később időzített trigger is hozzáadható, de jelenleg nincs automatikus trigger definiálva a repositoryban.
 
@@ -194,6 +195,56 @@ Az `originalFileName` elsődleges forrása a `meta` JSON `attachmentFileName` me
 
 Fontos böngészős megjegyzés: Google Apps Script sidebaroknál több egyszerre bejelentkezett Google fiók okozhat `Authorization is required` hibát a `google.script.run` hívásoknál. Ilyenkor érdemes olyan böngészőprofilban vagy inkognitó ablakban futtatni a Sheetet, ahol csak a használt Google fiók aktív.
 
+## Iktatói kivonat
+
+Az iktatói kivonat célja, hogy a felhasználó által kijelölt `REGISTRY` sorokhoz tartozó dokumentumokból külön Drive mappába másolt dokumentumcsomag és egy hozzá tartozó Google Sheets kivonat készüljön.
+
+A sidebar menüpontja:
+
+```text
+Iktatás > Iktatói kivonat készítése
+```
+
+A használat menete:
+
+1. A felhasználó kijelöli a kivonatolandó sorokat a `REGISTRY` munkalapon.
+2. Megnyitja az iktatói kivonat sidebart.
+3. Megadja a cél Google Drive mappa ID-jét vagy URL-jét.
+4. Az `Ellenőrzés` gombbal előnézetet kér.
+5. A `Kivonat készítése` gombbal elindítja a dokumentumok másolását és a `DOCUMENTS` munkalap létrehozását.
+
+A kijelölés értelmezése:
+
+- csak a `REGISTRY` munkalapon lévő kijelölés érvényes;
+- a kijelölt cellákból a rendszer teljes sorokat képez;
+- több tartomány és több cella is kijelölhető;
+- egy sor csak egyszer kerül a kivonatba;
+- a fejlécsor nem kerül exportálásra.
+
+A célmappa nem kötelezően üres. Ha már van benne tartalom, az ellenőrzés figyelmeztet, de a kivonat létrehozható.
+
+A célmappába kerül:
+
+- a sikeresen másolt dokumentumok;
+- egy új Google Sheets fájl, amely egyetlen `DOCUMENTS` munkalapot tartalmaz.
+
+A `DOCUMENTS` munkalap a `REGISTRY` látható, embernek szánt adatait tartalmazza a kivonatolt dokumentumokra. Kimaradnak a technikai oszlopok:
+
+- `meta`;
+- `metaMessageId`;
+- `metaAttachmentIndex`;
+- `googleDriveId`.
+
+A `view` oszlop megmarad, de az újonnan másolt Drive fájlokra mutató linket kap. A sorok display értékként kerülnek át, nem a registry belső képleteit vagy meta JSON-ját másolja tovább.
+
+A másolt dokumentumok célfájlneve:
+
+```text
+partner_seq_type_originalFileName
+```
+
+A fájlnévrészek ugyanúgy normalizálva vannak, mint a könyvelési exportnál. A kivonatkészítés progress bart jelenít meg, amely a feldolgozott, sikeresen másolt és hibás dokumentumok számát mutatja.
+
 ## Jogosultságok
 
 Az Apps Script manifest jelenlegi scope-jai:
@@ -204,6 +255,7 @@ Az Apps Script manifest jelenlegi scope-jai:
   "https://www.googleapis.com/auth/drive",
   "https://www.googleapis.com/auth/script.container.ui",
   "https://www.googleapis.com/auth/script.external_request",
+  "https://www.googleapis.com/auth/spreadsheets",
   "https://www.googleapis.com/auth/spreadsheets.currentonly"
 ]
 ```
@@ -214,7 +266,8 @@ Ezek a jelenlegi működéshez szükségesek:
 - Google Drive célmappa ellenőrzése, csatolmányok feltöltése és könyvelési export másolatok készítése;
 - Google Sheets container UI sidebar megnyitása;
 - OpenAI API hívás `UrlFetchApp` használatával;
-- az aktuális Google Sheet írása.
+- az aktuális Google Sheet írása;
+- új Google Sheets kivonatfájl létrehozása a cél Drive mappában.
 
 ## Projektstruktúra
 
@@ -232,7 +285,9 @@ Ezek a jelenlegi működéshez szükségesek:
 │   ├── accounting-export-sidebar.html
 │   ├── accounting-export.ts
 │   ├── ai.ts
-│   └── code.ts
+│   ├── code.ts
+│   ├── registry-extract-sidebar.html
+│   └── registry-extract.ts
 └── tsconfig.json
 ```
 
@@ -242,6 +297,8 @@ Fontos fájlok:
 - `src/ai.ts`: az OpenAI alapú dokumentumtípus-felismerés TypeScript forráskódja;
 - `src/accounting-export.ts`: havi könyvelési export backend logika;
 - `src/accounting-export-sidebar.html`: a könyvelési export sidebar felülete;
+- `src/registry-extract.ts`: kijelölt registry sorokból készülő iktatói kivonat backend logika;
+- `src/registry-extract-sidebar.html`: az iktatói kivonat sidebar felülete;
 - `appsscript.json`: Apps Script manifest, scope-okkal és runtime beállításokkal;
 - `scripts/copy-manifest.mjs`: build után bemásolja a manifestet és a sidebar HTML fájlokat a `build/` mappába;
 - `.clasp.json.example`: minta `clasp` konfiguráció;
