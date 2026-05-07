@@ -562,37 +562,37 @@ function buildAccountingExportTargetFileName(
   month: string,
   sourceFileName: string,
 ): string {
-  const originalFileName = document.originalFileName === ""
-    ? stripRegistryPrefixFromFileName(sourceFileName)
-    : document.originalFileName;
   const parts = [
     sanitizeAccountingExportFileNamePart(document.partner),
     sanitizeAccountingExportFileNamePart(document.registryNumber),
     sanitizeAccountingExportFileNamePart(document.type),
     sanitizeAccountingExportFileNamePart(month.replace("-", "")),
-    sanitizeAccountingExportOriginalFileName(originalFileName),
   ].filter((part) => part !== "");
+  const extension = getAccountingExportFileExtension(
+    document.originalFileName,
+    sourceFileName,
+  );
 
-  return parts.join("_");
+  return `${parts.join("_")}${extension}`;
 }
 
-function stripRegistryPrefixFromFileName(fileName: string): string {
-  return fileName.replace(/^R\d+_/, "").trim();
-}
+function getAccountingExportFileExtension(
+  originalFileName: string,
+  sourceFileName: string,
+): string {
+  const originalExtension = extractAccountingExportFileExtension(originalFileName);
 
-function sanitizeAccountingExportOriginalFileName(fileName: string): string {
-  const trimmedFileName = fileName.trim();
-  const extensionMatch = trimmedFileName.match(/(\.[A-Za-z0-9]{1,12})$/);
-
-  if (extensionMatch === null) {
-    return sanitizeAccountingExportFileNamePart(trimmedFileName);
+  if (originalExtension !== "") {
+    return originalExtension;
   }
 
-  const extension = extensionMatch[1].toLowerCase();
-  const baseName = trimmedFileName.slice(0, -extension.length);
-  const sanitizedBaseName = sanitizeAccountingExportFileNamePart(baseName);
+  return extractAccountingExportFileExtension(sourceFileName);
+}
 
-  return sanitizedBaseName === "" ? extension.slice(1) : `${sanitizedBaseName}${extension}`;
+function extractAccountingExportFileExtension(fileName: string): string {
+  const extensionMatch = fileName.trim().match(/(\.[A-Za-z0-9]{1,12})$/);
+
+  return extensionMatch === null ? "" : extensionMatch[1].toLowerCase();
 }
 
 function sanitizeAccountingExportFileNamePart(value: string): string {
